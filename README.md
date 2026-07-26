@@ -17,6 +17,9 @@ installation remains gated on the first green, published `php-bin` release.
 - macOS 26 (Tahoe) or newer on arm64 / aarch64
 - a current mise release with vfox tool-plugin support
 
+The plugin supports the maintained PHP branches 8.2 through 8.5. PHP branches
+that have reached end of life are intentionally not listed or installable.
+
 Other operating systems and Intel Macs receive an explicit unsupported-target
 error. Older macOS releases cannot load the published binaries.
 

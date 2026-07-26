@@ -47,8 +47,8 @@ end
 
 
 function M.is_supported_version(version)
-    return version:match("^8%.[0-5]%.%d+$") ~= nil
-        or version:match("^8%.[0-5]%.%d+%-[1-9]%d*$") ~= nil
+    return version:match("^8%.[2-5]%.%d+$") ~= nil
+        or version:match("^8%.[2-5]%.%d+%-[1-9]%d*$") ~= nil
 end
 
 
@@ -81,4 +81,3 @@ end
 
 
 return M
-

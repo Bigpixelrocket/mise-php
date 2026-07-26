@@ -65,7 +65,12 @@ export MISE_CONFIG_DIR="$TEMP_DIR/mise/config"
 export MISE_STATE_DIR="$TEMP_DIR/mise/state"
 
 mise plugin link php "$PROJECT_ROOT"
-mise ls-remote php | grep -Fx "8.4.99"
+AVAILABLE_VERSIONS="$(mise ls-remote php)"
+grep -Fx "8.4.99" <<< "$AVAILABLE_VERSIONS"
+if grep -Fx "8.1.99" <<< "$AVAILABLE_VERSIONS"; then
+  echo "EOL PHP release was unexpectedly listed." >&2
+  exit 1
+fi
 mise install php@8.4
 test -x "$MISE_DATA_DIR/installs/php/8.4.99/bin/php"
 mise exec php@8.4 -- php -v | grep -F "PHP 8.4.99"

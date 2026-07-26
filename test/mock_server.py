@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 PORT = int(sys.argv[1])
 ASSET_DIR = Path(sys.argv[2]).resolve()
 VERSION = "8.4.99"
+EOL_VERSION = "8.1.99"
 ARCHIVE_NAME = f"php-{VERSION}-cli-macos-aarch64.tar.gz"
 
 
@@ -32,6 +33,26 @@ def release_payload() -> dict:
     }
 
 
+def eol_release_payload() -> dict:
+    base_url = f"http://127.0.0.1:{PORT}/assets"
+    archive_name = f"php-{EOL_VERSION}-cli-macos-aarch64.tar.gz"
+    return {
+        "tag_name": EOL_VERSION,
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": archive_name,
+                "browser_download_url": f"{base_url}/{archive_name}",
+            },
+            {
+                "name": "SHA256SUMS",
+                "browser_download_url": f"{base_url}/SHA256SUMS",
+            },
+        ],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -41,7 +62,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/repos/bigpixelrocket/php-bin/releases":
-            self.send_json([release_payload()])
+            self.send_json([release_payload(), eol_release_payload()])
             return
 
         if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{VERSION}":
@@ -81,4 +102,3 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
-
