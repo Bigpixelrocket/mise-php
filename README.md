@@ -14,11 +14,11 @@ installation remains gated on the first green, published `php-bin` release.
 
 ## Requirements
 
-- macOS on arm64 / aarch64
+- macOS 26 (Tahoe) or newer on arm64 / aarch64
 - a current mise release with vfox tool-plugin support
 
 Other operating systems and Intel Macs receive an explicit unsupported-target
-error.
+error. Older macOS releases cannot load the published binaries.
 
 ## Install
 
@@ -86,4 +86,3 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues using
 ## License
 
 MIT. Downloaded PHP archives carry their own notices and licenses.
-
