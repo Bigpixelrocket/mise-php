@@ -14,7 +14,7 @@ permissions:
 jobs:
   install:
     name: Install PHP ${{ inputs.version }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -29,4 +29,3 @@ jobs:
           mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx Core
           mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx redis
           mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx sqlsrv
-
