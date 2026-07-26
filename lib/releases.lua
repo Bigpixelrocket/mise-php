@@ -52,6 +52,12 @@ function M.is_supported_version(version)
 end
 
 
+function M.is_exact_stable_version(version)
+    return version:match("^%d+%.%d+%.%d+$") ~= nil
+        or version:match("^%d+%.%d+%.%d+%-[1-9]%d*$") ~= nil
+end
+
+
 function M.archive_name(version)
     return "php-" .. version .. "-cli-macos-aarch64.tar.gz"
 end

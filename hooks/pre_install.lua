@@ -5,7 +5,7 @@ function PLUGIN:PreInstall(ctx)
     platform.assert_supported()
 
     local version = ctx.version
-    if not releases.is_supported_version(version) then
+    if not releases.is_exact_stable_version(version) then
         error("unsupported php release version: " .. tostring(version))
     end
 
@@ -39,4 +39,3 @@ function PLUGIN:PreInstall(ctx)
         note = "Installing PHP " .. version .. " for macOS arm64",
     }
 end
-

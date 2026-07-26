@@ -1,0 +1,4 @@
+web_search = "disabled"
+
+[sandbox_read_only]
+network_access = false

@@ -1,16 +1,34 @@
 # Repository settings
 
-Apply these settings after creating the public GitHub repository.
+The plan executor applies this state with the protected
+`php-bin/scripts/configure-github-maintenance` command and verifies it with
+`php-bin/scripts/snapshot-github-admin-state`. Snapshots are redacted: only
+secret names are retained.
 
-For the `main` branch ruleset:
+Required repository state:
 
 - Require a pull request before merging.
-- Require one approving review and Code Owner review.
-- Dismiss stale approvals when new commits are pushed.
 - Require the `Plugin contract` status check.
 - Require conversation resolution.
-- Block force pushes and branch deletion.
+- Require linear history; block force pushes and branch deletion.
+- Enable squash merge, auto-merge, update branch, and automatic head-branch
+  deletion; disable merge commits and rebase merge.
+- Allow workflow write permission for deterministic downstream jobs while
+  repository-scoped Codex jobs remain `contents: read`.
+- Create the protected `php-maintenance-release` environment.
+- Set `MAINTENANCE_OWNER=loadinglucian`.
+- Keep a distinct repository-scoped `OPENAI_API_KEY` secret.
 
-Enable private vulnerability reporting and automatically delete head branches
-after pull requests merge.
+CODEOWNERS protects agent instructions, workflows, schemas, policy snapshots,
+admission, and sealing. Runtime automation cannot admit those paths.
 
+```bash
+./php-bin/scripts/snapshot-github-admin-state \
+  --repo bigpixelrocket/mise-php \
+  --output mise-php/docs/admin-state/mise-php.json
+
+./php-bin/scripts/configure-github-maintenance \
+  --repo bigpixelrocket/mise-php \
+  --owner loadinglucian \
+  --required-check "Plugin contract"
+```

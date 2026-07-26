@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "phpBinPolicyCommit": "377d18adaae5969490d0228486043274aacdc652",
+  "policyDigest": "sha256:b98ee2ce839239739afaf44e6d20274778265306ffd66209126926caae376d73",
+  "maintainedBranches": ["8.2", "8.3", "8.4", "8.5"],
+  "generated": true
+}

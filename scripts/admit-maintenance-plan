@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from maintenance.admission import main
+
+sys.argv.insert(1, "admit")
+raise SystemExit(main())
