@@ -26,6 +26,18 @@ error. Older macOS releases cannot load the published binaries.
 
 ## Install
 
+If another plugin is already installed under the `php` name, inspect it and
+remove it before installing `mise-php`:
+
+```bash
+mise plugins ls --urls
+mise plugins uninstall --purge php
+```
+
+Only run the uninstall command after confirming that `php` is the plugin you
+want to replace. The `--purge` option also removes PHP versions, downloads, and
+cache managed by that plugin.
+
 ```bash
 mise plugin install php https://github.com/bigpixelrocket/mise-php
 mise ls-remote php
