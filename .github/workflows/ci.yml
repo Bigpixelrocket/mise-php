@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Plugin contract
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+      - name: Install shellcheck
+        run: brew install shellcheck
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh test/fixture-php.sh
+      - name: Run offline installation test
+        run: scripts/test.sh
+

@@ -1,0 +1,32 @@
+name: Published release test
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published php-bin release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install PHP ${{ inputs.version }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+      - name: Link plugin
+        run: mise plugin link php "$GITHUB_WORKSPACE"
+      - name: Install published release
+        run: mise install "php@${{ inputs.version }}"
+      - name: Smoke test PHP
+        run: |
+          mise exec "php@${{ inputs.version }}" -- php -v
+          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx Core
+          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx redis
+          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx sqlsrv
+

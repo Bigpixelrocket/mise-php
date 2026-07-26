@@ -1,0 +1,6 @@
+mise-php is licensed under the MIT License.
+
+The plugin downloads PHP archives published by bigpixelrocket/php-bin. Those
+archives contain PHP and third-party software under their respective licenses.
+Review the NOTICE and license material inside each downloaded archive.
+
