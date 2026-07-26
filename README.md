@@ -9,8 +9,9 @@ It never compiles PHP locally.
 
 ## Status
 
-The plugin contract and offline end-to-end tests are implemented. Real-world
-installation remains gated on the first green, published `php-bin` release.
+The plugin contract, offline end-to-end tests, and installation from published
+`php-bin` releases are verified on macOS 26 arm64. Maintained PHP releases for
+8.2 through 8.5 are available now.
 
 ## Requirements
 
