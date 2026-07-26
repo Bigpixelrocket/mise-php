@@ -12,7 +12,7 @@ permissions:
 jobs:
   contract:
     name: Plugin contract
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -23,4 +23,3 @@ jobs:
         run: shellcheck scripts/*.sh test/fixture-php.sh
       - name: Run offline installation test
         run: scripts/test.sh
-
