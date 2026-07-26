@@ -1,0 +1,31 @@
+name: Plugin bug
+description: Report a reproducible listing, installation, or activation problem.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Use private vulnerability reporting.
+  - type: input
+    id: version
+    attributes:
+      label: Requested PHP version
+      placeholder: 8.4.5
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the mise command and complete error output.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include mise version, macOS version, and architecture.
+    validations:
+      required: true
+
