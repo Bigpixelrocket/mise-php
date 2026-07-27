@@ -14,19 +14,11 @@ import sys
 from typing import Any
 
 
-PROTECTED = (
-    ".github/codex/maintenance/*",
-    ".github/workflows/*",
-    ".codex/*",
-    "schemas/*",
-    "maintenance/*",
-    "scripts/admit-maintenance-plan",
-    "scripts/seal-maintenance-patch",
-    "scripts/verify-merge-admission",
-    "maintenance-events/*",
-    "readiness/*",
-    ".github/CODEOWNERS",
-)
+PROTECTED_PATHS = pathlib.Path(__file__).with_name("protected-paths.json")
+try:
+    PROTECTED = tuple(json.loads(PROTECTED_PATHS.read_text())["patterns"])
+except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+    raise RuntimeError(f"cannot load protected paths: {error}") from error
 PROHIBITED = {"merge", "push", "tag", "release", "publish", "workflow_permissions", "secret_access"}
 ACTION_KEY_RE = re.compile(
     r"^(new_patch:\d+\.\d+\.\d+|new_branch:\d+\.\d+|"
