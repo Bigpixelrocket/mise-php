@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "MAINTENANCE_ADMIN_CANARY",
+  "purpose": "Verify protected controls reject unattended auto-merge and require a narrow administrator bypass.",
+  "createdAt": "2026-07-27T09:47:00Z",
+  "mustBeRemoved": true
+}
