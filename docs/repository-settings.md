@@ -18,6 +18,7 @@ Required repository state:
 - Allow workflow write permission for deterministic downstream jobs while
   repository-scoped Codex jobs remain `contents: read`.
 - Create the protected `php-maintenance-release` environment.
+- Enable GitHub immutable releases for future repository releases.
 - Set `MAINTENANCE_OWNER=loadinglucian`.
 - Keep a distinct repository-scoped `OPENAI_API_KEY` secret.
 
