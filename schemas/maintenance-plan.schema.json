@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schemaVersion", "actionKey", "action", "agentContract", "evidence", "repositories", "preconditions", "editsRequired", "allowedPaths", "requiredChecks", "notification", "risk", "completionAssessment", "summary"],
+  "required": ["schemaVersion", "actionKey", "action", "agentContract", "evidence", "repositories", "preconditions", "editsRequired", "allowedPaths", "requiredChecks", "agentOperations", "budgets", "notification", "risk", "completionAssessment", "summary"],
   "properties": {
     "schemaVersion": {"const": 1},
     "actionKey": {"type": "string"},
@@ -33,6 +33,16 @@
     "editsRequired": {"type": "boolean"},
     "allowedPaths": {"type": "object"},
     "requiredChecks": {"const": ["Plugin contract"]},
+    "agentOperations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "budgets": {
+      "type": "object",
+      "required": ["maxModelCalls", "maxRetries", "timeoutMinutes"],
+      "properties": {
+        "maxModelCalls": {"type": "integer", "minimum": 1, "maximum": 5},
+        "maxRetries": {"type": "integer", "minimum": 1, "maximum": 3},
+        "timeoutMinutes": {"type": "integer", "minimum": 1, "maximum": 60}
+      }
+    },
     "notification": {"type": "object"},
     "risk": {"type": "string"},
     "completionAssessment": {"type": "object"},

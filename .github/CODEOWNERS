@@ -3,7 +3,7 @@
 /.github/CODEOWNERS @loadinglucian
 /.codex/ @loadinglucian
 /maintenance/ @loadinglucian
-/schemas/agent-* @loadinglucian
+/schemas/ @loadinglucian
 /scripts/admit-maintenance-plan @loadinglucian
 /scripts/seal-maintenance-patch @loadinglucian
 /scripts/verify-merge-admission @loadinglucian

@@ -20,7 +20,10 @@ Required repository state:
 - Keep the default workflow token read-only; deterministic downstream jobs
   explicitly request write scopes while repository-scoped Codex jobs remain
   `contents: read`.
-- Require every third-party Action reference to use a full commit SHA.
+- Do not allow the workflow token to approve pull requests.
+- Allow GitHub-owned Actions plus only `openai/codex-action` and
+  `jdx/mise-action`, and require every Action reference to use a full commit
+  SHA.
 - Create the protected `php-maintenance-release` environment.
 - Enable GitHub immutable releases for future repository releases.
 - Set `MAINTENANCE_OWNER=loadinglucian`.

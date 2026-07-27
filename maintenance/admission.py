@@ -18,7 +18,7 @@ PROTECTED = (
     ".github/codex/maintenance/*",
     ".github/workflows/*",
     ".codex/*",
-    "schemas/agent-*",
+    "schemas/*",
     "maintenance/*",
     "scripts/admit-maintenance-plan",
     "scripts/seal-maintenance-patch",
@@ -66,15 +66,38 @@ def write(path: pathlib.Path, value: Any) -> None:
     path.write_bytes(canonical(value))
 
 
+def contained_path(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
+    if not isinstance(value, str) or not value:
+        raise AdmissionError(f"{label} is missing")
+    relative = pathlib.PurePosixPath(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise AdmissionError(f"unsafe {label}: {value}")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / pathlib.Path(*relative.parts)).resolve()
+    if not resolved.is_relative_to(resolved_root):
+        raise AdmissionError(f"unsafe {label}: {value}")
+    return resolved
+
+
 def protected(path: str) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in PROTECTED)
 
 
 def validate_assessment(assessment: dict, contract: dict, digests: dict) -> None:
+    if not isinstance(contract, dict):
+        raise AdmissionError("task contract must be an object")
+    criteria = contract.get("completionCriteria")
+    if not isinstance(criteria, list) or not criteria or not all(isinstance(item, dict) for item in criteria):
+        raise AdmissionError("completion criteria must be non-empty objects")
+    criterion_ids = [item.get("id") for item in criteria]
+    if not all(isinstance(item, str) and item for item in criterion_ids) or len(criterion_ids) != len(set(criterion_ids)):
+        raise AdmissionError("completion criterion ids are missing or duplicated")
     if assessment.get("instructionDigests") != digests:
         raise AdmissionError("instruction digests changed")
-    expected = {item["id"] for item in contract["completionCriteria"]}
+    expected = set(criterion_ids)
     results = assessment.get("criteria", [])
+    if not isinstance(results, list) or not all(isinstance(item, dict) for item in results):
+        raise AdmissionError("criterion results must be objects")
     if {item.get("id") for item in results} != expected or len(results) != len(expected):
         raise AdmissionError("criterion results do not exactly match the contract")
     all_passed = (
@@ -164,8 +187,20 @@ def admit(
         raise AdmissionError("captured support policy digest changed")
     if captures_by_id["policy_invariants"].get("digest") != invariants_digest:
         raise AdmissionError("captured policy invariants digest changed")
-    selector_body = load(capture_manifest.parent / captures_by_id["php_bin_policy_selector"]["bodyPath"])
-    commit_body = load(capture_manifest.parent / captures_by_id["php_bin_state"]["bodyPath"])
+    selector_body = load(
+        contained_path(
+            capture_manifest.parent,
+            captures_by_id["php_bin_policy_selector"].get("bodyPath"),
+            "captured policy selector path",
+        )
+    )
+    commit_body = load(
+        contained_path(
+            capture_manifest.parent,
+            captures_by_id["php_bin_state"].get("bodyPath"),
+            "captured php-bin state path",
+        )
+    )
     if (
         not isinstance(selector_body, list)
         or len(selector_body) != 1
@@ -181,7 +216,11 @@ def admit(
         capture = captures_by_id.get(item.get("captureId")) if isinstance(item, dict) else None
         if capture is None or item.get("digest") != capture.get("digest"):
             raise AdmissionError("plan evidence does not match the captured policy")
-        body_path = capture_manifest.parent / capture.get("bodyPath", "")
+        body_path = contained_path(
+            capture_manifest.parent,
+            capture.get("bodyPath"),
+            "captured policy body path",
+        )
         if not body_path.is_file() or digest_file(body_path) != capture.get("digest"):
             raise AdmissionError("captured policy body changed")
         locator = item.get("locator", {})
@@ -189,9 +228,10 @@ def admit(
             raise AdmissionError("policy evidence requires a JSON pointer")
         resolve_pointer(load(body_path), locator.get("value", ""))
         evidence_refs.add(f"evidence[{index}]")
+    precondition_refs = {f"preconditions.{key}" for key in preconditions}
     for criterion in plan.get("completionAssessment", {}).get("criteria", []):
         for reference in criterion.get("evidence", []):
-            if reference not in evidence_refs and not reference.startswith("preconditions."):
+            if reference not in evidence_refs and reference not in precondition_refs:
                 raise AdmissionError("completion evidence reference does not resolve")
     repositories = plan.get("repositories")
     if not isinstance(repositories, list) or "mise-php" not in repositories or any(
@@ -222,16 +262,24 @@ def admit(
             flattened.append(pattern)
     if not any(fnmatch.fnmatch("support-snapshot.json", pattern) for pattern in flattened):
         raise AdmissionError("policy synchronization does not admit the generated support snapshot")
-    if set(plan.get("agentOperations", [])) & PROHIBITED:
+    operations = plan.get("agentOperations")
+    if not isinstance(operations, list) or not all(isinstance(item, str) for item in operations):
+        raise AdmissionError("agent operations must be an array of strings")
+    if set(operations) & PROHIBITED:
         raise AdmissionError("runtime plan grants irreversible authority")
-    budgets = plan.get("budgets", {})
-    if budgets:
-        if not (0 < int(budgets.get("maxModelCalls", 0)) <= 5):
-            raise AdmissionError("model-call budget is outside reviewed bound")
-        if not (0 < int(budgets.get("maxRetries", 0)) <= 3):
-            raise AdmissionError("retry budget is outside reviewed bound")
-        if not (0 < int(budgets.get("timeoutMinutes", 0)) <= 60):
-            raise AdmissionError("time budget is outside reviewed bound")
+    budgets = plan.get("budgets")
+    if not isinstance(budgets, dict) or not budgets:
+        raise AdmissionError("plan must declare reviewed budgets")
+    for field, upper, label in (
+        ("maxModelCalls", 5, "model-call"),
+        ("maxRetries", 3, "retry"),
+        ("timeoutMinutes", 60, "time"),
+    ):
+        value = budgets.get(field)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise AdmissionError(f"{field} must be an integer")
+        if not 0 < value <= upper:
+            raise AdmissionError(f"{label} budget is outside reviewed bound")
     return {
         "admitted": True,
         "actionKey": plan["actionKey"],
@@ -253,6 +301,8 @@ def seal(
     validate_assessment(result, contract, digests)
     if result["goNoGo"] != "go":
         raise AdmissionError("implementation result is no-go")
+    if not re.fullmatch(r"[0-9a-f]{40}", base or ""):
+        raise AdmissionError("base is not an exact commit SHA")
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
     if head != base:
         raise AdmissionError("implementation checkout is not the admitted base")
@@ -287,11 +337,17 @@ def seal(
         mode = candidate.stat().st_mode & 0o777
         if mode not in {0o644, 0o755} or (mode == 0o755 and not path.startswith("scripts/")):
             raise AdmissionError(f"unexpected diff mode: {path}")
-        text = body.decode("utf-8")
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdmissionError(f"diff entry is not valid UTF-8: {path}") from error
         if re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_|\\bsk-[A-Za-z0-9_-]{20,}", text):
             raise AdmissionError(f"secret-like material in diff: {path}")
         if path == "support-snapshot.json":
-            snapshot = json.loads(text)
+            try:
+                snapshot = json.loads(text)
+            except json.JSONDecodeError as error:
+                raise AdmissionError("support snapshot is not valid JSON") from error
             preconditions = plan.get("preconditions", {})
             policy = load(policy_path)
             if digest_file(policy_path) != preconditions.get("supportPolicyDigest"):
@@ -329,7 +385,7 @@ def seal(
     parts = [tracked_patch]
     for path in untracked:
         result_diff = subprocess.run(
-            ["git", "diff", "--binary", "--no-index", "/dev/null", path],
+            ["git", "diff", "--binary", "--no-index", "--", "/dev/null", path],
             cwd=repo,
             check=False,
             text=True,
@@ -364,6 +420,8 @@ def verify_merge(
     preconditions: dict,
     current: dict,
 ) -> dict:
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_head or ""):
+        raise AdmissionError("expected head is not an exact commit SHA")
     if git(repo, "rev-parse", "HEAD") != expected_head:
         raise AdmissionError("PR head does not equal validated SHA")
     if not checks or any(value != "success" for value in checks.values()):

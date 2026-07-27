@@ -187,6 +187,7 @@ class MaintenanceConsumerTests(unittest.TestCase):
                 "requiredChecks": ["Plugin contract"],
                 "risk": "lifecycle",
                 "agentOperations": [],
+                "budgets": {"maxModelCalls": 1, "maxRetries": 1, "timeoutMinutes": 30},
             }
             result = admit(
                 plan, contract, shared, phase, event, manifest,
