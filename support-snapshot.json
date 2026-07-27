@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "phpBinPolicyCommit": "e05811d0f320b882d1982ff6e034c559d91176de",
+  "phpBinPolicyCommit": "2a9a100c701c3e1e769e8cab47e8c3af61e52d89",
   "policyDigest": "sha256:681ee030c3aaa337ab14d52b6c681f1095bae4992392e4f2c57c0639b42bedc7",
   "policyInvariantsDigest": "sha256:2d8dd3f372f5f409ad0e4badf7cc68f8c2ed3d49fa73ab88153152efeeff57b9",
   "maintainedBranches": ["8.2", "8.3", "8.4", "8.5"],
