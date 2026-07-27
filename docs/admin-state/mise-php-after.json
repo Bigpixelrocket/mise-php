@@ -71,11 +71,11 @@
     },
     "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/branches/main/protection"
   },
-  "capturedAt": "2026-07-27T09:56:10Z",
+  "capturedAt": "2026-07-27T10:10:30Z",
   "environments": {
     "environments": [
       {
-        "can_admins_bypass": true,
+        "can_admins_bypass": false,
         "created_at": "2026-07-27T09:10:07Z",
         "deployment_branch_policy": {
           "custom_branch_policies": false,
@@ -92,7 +92,7 @@
             "type": "branch_policy"
           }
         ],
-        "updated_at": "2026-07-27T09:10:07Z",
+        "updated_at": "2026-07-27T10:08:07Z",
         "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/environments/php-maintenance-release"
       }
     ],
@@ -128,16 +128,16 @@
     "delete_branch_on_merge": true,
     "security_and_analysis": {
       "dependabot_security_updates": {
-        "status": "disabled"
+        "status": "enabled"
       },
       "secret_scanning": {
-        "status": "disabled"
+        "status": "enabled"
       },
       "secret_scanning_non_provider_patterns": {
         "status": "disabled"
       },
       "secret_scanning_push_protection": {
-        "status": "disabled"
+        "status": "enabled"
       },
       "secret_scanning_validity_checks": {
         "status": "disabled"
@@ -161,7 +161,7 @@
     ],
     "verified_allowed": false
   },
-  "snapshotDigest": "sha256:d517fae344342fbc5a16fc303f98957f7761f84d22296e5becfe4dca0c34609c",
+  "snapshotDigest": "sha256:c403c9c4c6abab5518aed00a89f5d89b3233921e6a49627e12c2b7d953da6086",
   "variables": [
     "MAINTENANCE_OWNER"
   ],
