@@ -17,8 +17,10 @@ Required repository state:
   protected control paths.
 - Enable squash merge, auto-merge, update branch, and automatic head-branch
   deletion; disable merge commits and rebase merge.
-- Allow workflow write permission for deterministic downstream jobs while
-  repository-scoped Codex jobs remain `contents: read`.
+- Keep the default workflow token read-only; deterministic downstream jobs
+  explicitly request write scopes while repository-scoped Codex jobs remain
+  `contents: read`.
+- Require every third-party Action reference to use a full commit SHA.
 - Create the protected `php-maintenance-release` environment.
 - Enable GitHub immutable releases for future repository releases.
 - Set `MAINTENANCE_OWNER=loadinglucian`.
