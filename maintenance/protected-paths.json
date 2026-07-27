@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "patterns": [
+    ".github/codex/maintenance/*",
+    ".github/workflows/*",
+    ".codex/*",
+    "schemas/*",
+    "maintenance/*",
+    "scripts/admit-maintenance-plan",
+    "scripts/seal-maintenance-patch",
+    "scripts/verify-merge-admission",
+    "maintenance-events/*",
+    "readiness/*",
+    ".github/CODEOWNERS"
+  ]
+}
