@@ -25,6 +25,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: Bigpixelrocket/php-bin
+          path: php-operator-control
+          sparse-checkout: .github/maintenance-operator.json
+          persist-credentials: false
+      - name: Bind investigation to the live operator control
+        id: operator
+        run: |
+          state="$(jq -r .unattendedMutation php-operator-control/.github/maintenance-operator.json)"
+          test "$state" = "paused" || test "$state" = "enabled"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C php-operator-control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Capture accepted public php-bin policy
         run: |
           mkdir -p maintenance-run
@@ -45,7 +58,7 @@ jobs:
             --output maintenance-run/decision.json
           echo "trigger=$(jq -r .trigger maintenance-run/decision.json)" >> "$GITHUB_OUTPUT"
       - name: Prepare exact investigation contract
-        if: steps.compare.outputs.trigger != 'quiet'
+        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
         run: |
           jq -n \
             --arg actionKey "$(jq -r .actionKey maintenance-run/decision.json)" \
@@ -53,12 +66,14 @@ jobs:
             --arg phpBinPolicyCommit "$(jq -r .phpBinPolicyCommit maintenance-run/decision.json)" \
             --arg supportPolicyDigest "$(jq -r .policyDigest maintenance-run/decision.json)" \
             --arg policyInvariantsDigest "$(jq -r .policyInvariantsDigest maintenance-run/decision.json)" \
+            --arg phpBinOperatorCommit "${{ steps.operator.outputs.commit }}" \
+            --arg operatorState "${{ steps.operator.outputs.state }}" \
             '{
               contractVersion:1,
               phase:"investigation",
               goal:"Determine the exact mise-php work required by the accepted php-bin policy.",
               actionKey:$actionKey,
-              preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest},
+              preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState},
               allowedAuthority:["read_repository","read_captured_policy"],
               nonGoals:["upstream_php_classification","repository_mutation","irreversible_github_effect"],
               completionCriteria:[
@@ -86,7 +101,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/codex-home"
           cp .codex/investigation.config.toml "$RUNNER_TEMP/codex-home/"
       - name: Run repository-scoped offline Codex investigation
-        if: steps.compare.outputs.trigger != 'quiet'
+        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -99,7 +114,7 @@ jobs:
           allow-bots: github-actions[bot]
           codex-args: '["--strict-config","--ephemeral","--profile","investigation","--output-schema","schemas/maintenance-plan.schema.json"]'
       - name: Admit plan against exact policy and checkout
-        if: steps.compare.outputs.trigger != 'quiet'
+        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
         run: |
           ./scripts/admit-maintenance-plan \
             --plan maintenance-run/maintenance-plan.json \
@@ -114,7 +129,7 @@ jobs:
             --output maintenance-run/admission.json
       - name: Expose plan
         id: plan
-        if: steps.compare.outputs.trigger != 'quiet'
+        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
         run: |
           echo "edits_required=$(jq -r .editsRequired maintenance-run/maintenance-plan.json)" >> "$GITHUB_OUTPUT"
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -467,19 +482,28 @@ jobs:
           admitted_php="$(jq -r .preconditions.phpBinPolicyCommit maintenance-run/implementation-plan.json)"
           admitted_policy="$(jq -r .preconditions.supportPolicyDigest maintenance-run/implementation-plan.json)"
           admitted_invariants="$(jq -r .preconditions.policyInvariantsDigest maintenance-run/implementation-plan.json)"
+          admitted_operator_commit="$(jq -r .preconditions.phpBinOperatorCommit maintenance-run/implementation-plan.json)"
+          admitted_operator_state="$(jq -r .preconditions.operatorState maintenance-run/implementation-plan.json)"
+          current_operator_commit="$(gh api repos/Bigpixelrocket/php-bin/commits/main --jq .sha)"
+          gh api "repos/Bigpixelrocket/php-bin/contents/.github/maintenance-operator.json?ref=$current_operator_commit" \
+            --jq .content | base64 --decode > maintenance-run/current-operator.json
           jq -n \
             --arg misePhpHead "$admitted_mise" \
             --arg phpBinPolicyCommit "$admitted_php" \
             --arg supportPolicyDigest "$admitted_policy" \
             --arg policyInvariantsDigest "$admitted_invariants" \
-            '{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest}' \
+            --arg phpBinOperatorCommit "$admitted_operator_commit" \
+            --arg operatorState "$admitted_operator_state" \
+            '{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState}' \
             > maintenance-run/preconditions.json
           jq -n \
             --arg misePhpHead "$(git rev-parse origin/main)" \
             --arg phpBinPolicyCommit "$(jq -r .sha maintenance-run/current-php-bin-main.json)" \
             --arg supportPolicyDigest "sha256:$(shasum -a 256 maintenance-run/current-support-policy.json | awk '{print $1}')" \
             --arg policyInvariantsDigest "sha256:$(shasum -a 256 maintenance-run/current-policy-invariants.json | awk '{print $1}')" \
-            '{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest}' \
+            --arg phpBinOperatorCommit "$current_operator_commit" \
+            --arg operatorState "$(jq -r .unattendedMutation maintenance-run/current-operator.json)" \
+            '{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState}' \
             > maintenance-run/current.json
           jq -n '{"Plugin contract":"success"}' > maintenance-run/checks.json
           ./scripts/verify-merge-admission \

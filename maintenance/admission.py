@@ -147,6 +147,10 @@ def admit(
         raise AdmissionError("php-bin policy precondition is stale")
     if preconditions.get("policyInvariantsDigest") != invariants_digest:
         raise AdmissionError("php-bin invariant precondition is stale")
+    if preconditions.get("operatorState") != "enabled" or not re.fullmatch(
+        r"[0-9a-f]{40}", preconditions.get("phpBinOperatorCommit", "")
+    ):
+        raise AdmissionError("php-bin operator precondition is not enabled and exact")
     capture_document = load(capture_manifest)
     captures = capture_document.get("captures", [])
     if capture_document.get("schemaVersion") != 1 or not isinstance(captures, list):

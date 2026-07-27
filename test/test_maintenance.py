@@ -129,6 +129,8 @@ class MaintenanceConsumerTests(unittest.TestCase):
                 "phpBinPolicyCommit": commit_sha,
                 "supportPolicyDigest": policy_digest,
                 "policyInvariantsDigest": invariants_digest,
+                "phpBinOperatorCommit": "e" * 40,
+                "operatorState": "enabled",
             }
             contract = {
                 "contractVersion": 1,
