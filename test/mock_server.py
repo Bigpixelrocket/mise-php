@@ -12,6 +12,7 @@ ASSET_DIR = Path(sys.argv[2]).resolve()
 VERSION = "8.4.99"
 EOL_VERSION = "8.1.99"
 ARCHIVE_NAME = f"php-{VERSION}-cli-macos-aarch64.tar.gz"
+EOL_ARCHIVE_NAME = f"php-{EOL_VERSION}-cli-macos-aarch64.tar.gz"
 
 
 def release_payload() -> dict:
@@ -35,15 +36,14 @@ def release_payload() -> dict:
 
 def eol_release_payload() -> dict:
     base_url = f"http://127.0.0.1:{PORT}/assets"
-    archive_name = f"php-{EOL_VERSION}-cli-macos-aarch64.tar.gz"
     return {
         "tag_name": EOL_VERSION,
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": archive_name,
-                "browser_download_url": f"{base_url}/{archive_name}",
+                "name": EOL_ARCHIVE_NAME,
+                "browser_download_url": f"{base_url}/{EOL_ARCHIVE_NAME}",
             },
             {
                 "name": "SHA256SUMS",
@@ -68,11 +68,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{VERSION}":
             self.send_json(release_payload())
             return
+        if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{EOL_VERSION}":
+            self.send_json(eol_release_payload())
+            return
 
         asset_prefix = "/assets/"
         if path.startswith(asset_prefix):
             name = path[len(asset_prefix) :]
-            if name not in {ARCHIVE_NAME, "SHA256SUMS"}:
+            if name not in {ARCHIVE_NAME, EOL_ARCHIVE_NAME, "SHA256SUMS"}:
                 self.send_error(404)
                 return
 

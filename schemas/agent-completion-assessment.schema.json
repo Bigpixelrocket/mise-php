@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["contractVersion", "instructionDigests", "phaseStatus", "criteria", "goNoGo", "unresolved", "summary"],
+  "properties": {
+    "contractVersion": {"const": 1},
+    "instructionDigests": {"type": "object"},
+    "phaseStatus": {"enum": ["complete", "blocked", "needs_human"]},
+    "criteria": {"type": "array"},
+    "goNoGo": {"enum": ["go", "no_go"]},
+    "unresolved": {"type": "array"},
+    "summary": {"type": "string"}
+  }
+}

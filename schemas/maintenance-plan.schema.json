@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schemaVersion", "actionKey", "action", "agentContract", "evidence", "repositories", "preconditions", "editsRequired", "allowedPaths", "requiredChecks", "agentOperations", "budgets", "notification", "risk", "completionAssessment", "summary"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "actionKey": {"type": "string"},
+    "action": {"enum": ["no_change", "new_patch", "new_branch", "branch_eol", "repair", "reconcile_partial", "blocked", "needs_human"]},
+    "agentContract": {"type": "object"},
+    "evidence": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["captureId", "digest", "locator"],
+        "properties": {
+          "captureId": {"enum": ["php_bin_policy_selector", "php_bin_state", "support_policy", "policy_invariants"]},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "locator": {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": {"const": "json_pointer"},
+              "value": {"type": "string", "pattern": "^/"}
+            }
+          }
+        }
+      }
+    },
+    "repositories": {"type": "array"},
+    "preconditions": {"type": "object"},
+    "editsRequired": {"type": "boolean"},
+    "allowedPaths": {"type": "object"},
+    "requiredChecks": {"const": ["Plugin contract"]},
+    "agentOperations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "budgets": {
+      "type": "object",
+      "required": ["maxModelCalls", "maxRetries", "timeoutMinutes"],
+      "properties": {
+        "maxModelCalls": {"type": "integer", "minimum": 1, "maximum": 5},
+        "maxRetries": {"type": "integer", "minimum": 1, "maximum": 3},
+        "timeoutMinutes": {"type": "integer", "minimum": 1, "maximum": 60}
+      }
+    },
+    "notification": {"type": "object"},
+    "risk": {"type": "string"},
+    "completionAssessment": {"type": "object"},
+    "summary": {"type": "string"}
+  }
+}

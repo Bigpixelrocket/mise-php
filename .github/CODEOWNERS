@@ -1,2 +1,9 @@
-* @loadinglucian
-
+/.github/codex/ @loadinglucian
+/.github/workflows/ @loadinglucian
+/.github/CODEOWNERS @loadinglucian
+/.codex/ @loadinglucian
+/maintenance/ @loadinglucian
+/schemas/ @loadinglucian
+/scripts/admit-maintenance-plan @loadinglucian
+/scripts/seal-maintenance-patch @loadinglucian
+/scripts/verify-merge-admission @loadinglucian
