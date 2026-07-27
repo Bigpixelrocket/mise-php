@@ -11,6 +11,8 @@ Required repository state:
 - Require the `Plugin contract` status check.
 - Require conversation resolution.
 - Require linear history; block force pushes and branch deletion.
+- Enforce protection for administrators and require CODEOWNER approval for
+  protected control paths.
 - Enable squash merge, auto-merge, update branch, and automatic head-branch
   deletion; disable merge commits and rebase merge.
 - Allow workflow write permission for deterministic downstream jobs while
@@ -19,8 +21,10 @@ Required repository state:
 - Set `MAINTENANCE_OWNER=loadinglucian`.
 - Keep a distinct repository-scoped `OPENAI_API_KEY` secret.
 
-CODEOWNERS protects agent instructions, workflows, schemas, policy snapshots,
-admission, and sealing. Runtime automation cannot admit those paths.
+CODEOWNERS protects agent instructions, workflows, schemas, admission, sealing,
+and merge admission. Generated snapshots and deterministic readiness records
+remain outside CODEOWNERS so their exact-SHA PRs can merge; runtime sealing
+still rejects event/readiness paths as agent-authored changes.
 
 ```bash
 ./php-bin/scripts/snapshot-github-admin-state \

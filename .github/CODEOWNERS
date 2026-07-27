@@ -6,4 +6,4 @@
 /schemas/agent-* @loadinglucian
 /scripts/admit-maintenance-plan @loadinglucian
 /scripts/seal-maintenance-patch @loadinglucian
-/support-snapshot.json @loadinglucian
+/scripts/verify-merge-admission @loadinglucian

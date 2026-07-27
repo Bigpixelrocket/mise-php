@@ -7,12 +7,32 @@
     "actionKey": {"type": "string"},
     "action": {"enum": ["no_change", "new_patch", "new_branch", "branch_eol", "repair", "reconcile_partial", "blocked", "needs_human"]},
     "agentContract": {"type": "object"},
-    "evidence": {"type": "array"},
+    "evidence": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["captureId", "digest", "locator"],
+        "properties": {
+          "captureId": {"enum": ["php_bin_policy_selector", "php_bin_state", "support_policy", "policy_invariants"]},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "locator": {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": {"const": "json_pointer"},
+              "value": {"type": "string", "pattern": "^/"}
+            }
+          }
+        }
+      }
+    },
     "repositories": {"type": "array"},
     "preconditions": {"type": "object"},
     "editsRequired": {"type": "boolean"},
     "allowedPaths": {"type": "object"},
-    "requiredChecks": {"type": "array"},
+    "requiredChecks": {"const": ["Plugin contract"]},
     "notification": {"type": "object"},
     "risk": {"type": "string"},
     "completionAssessment": {"type": "object"},
