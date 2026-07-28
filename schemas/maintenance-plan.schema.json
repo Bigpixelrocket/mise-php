@@ -49,7 +49,7 @@
         }
       }
     },
-    "repositories": {"type": "array", "items": {"type": "string", "enum": ["php-bin", "mise-php"]}, "uniqueItems": true},
+    "repositories": {"type": "array", "items": {"type": "string", "enum": ["php-bin", "mise-php"]}},
     "preconditions": {
       "type": "object",
       "additionalProperties": false,
@@ -69,11 +69,11 @@
       "additionalProperties": false,
       "required": ["mise-php"],
       "properties": {
-        "mise-php": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        "mise-php": {"type": "array", "items": {"type": "string"}}
       }
     },
     "requiredChecks": {"type": "array", "items": {"type": "string"}, "const": ["Plugin contract"]},
-    "agentOperations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "agentOperations": {"type": "array", "items": {"type": "string"}},
     "budgets": {
       "type": "object",
       "additionalProperties": false,
