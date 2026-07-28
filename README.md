@@ -85,6 +85,11 @@ From a checkout containing both repositories:
   --output ./verification-results
 ```
 
+Each repository's `scripts/test.sh` also validates every pinned Codex Action
+invocation, exact CLI version, and canonical `config.toml` loading against the
+reviewed offline contract in `.github/codex-action-contract.json` before
+exercising maintenance behavior.
+
 Inspect `support-snapshot.json`, `maintenance-events/`, `readiness/`, retained
 workflow artifacts, and the event's GitHub issue. Recovery corrects the cause
 and reruns the normal admitted path; it never disables checksum, policy,

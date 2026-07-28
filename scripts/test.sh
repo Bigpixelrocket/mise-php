@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 "$SCRIPT_DIR/check-public-language.sh"
+"$SCRIPT_DIR/validate-codex-action-inputs"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "Plugin installation tests require macOS arm64." >&2
