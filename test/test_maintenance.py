@@ -62,8 +62,10 @@ class MaintenanceConsumerTests(unittest.TestCase):
             readiness("new_branch:8.6", "main", "bad", "bad", "main", [])
 
     def test_protected_controls_are_not_admissible(self):
+        self.assertTrue(protected(".github/codex-action-contract.json"))
         self.assertTrue(protected(".github/workflows/maintenance.yml"))
         self.assertTrue(protected("maintenance/admission.py"))
+        self.assertTrue(protected("scripts/validate-codex-action-inputs"))
         self.assertTrue(protected("maintenance-events/new-patch.json"))
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
