@@ -71,7 +71,7 @@
     },
     "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/branches/main/protection"
   },
-  "capturedAt": "2026-07-27T10:10:30Z",
+  "capturedAt": "2026-07-28T13:05:44Z",
   "environments": {
     "environments": [
       {
@@ -161,12 +161,12 @@
     ],
     "verified_allowed": false
   },
-  "snapshotDigest": "sha256:c403c9c4c6abab5518aed00a89f5d89b3233921e6a49627e12c2b7d953da6086",
+  "snapshotDigest": "sha256:e50672433148e1054cd0436af11f47cbc7bf643db650eaed166ffcd1633fa632",
   "variables": [
     "MAINTENANCE_OWNER"
   ],
   "workflowPermissions": {
-    "can_approve_pull_request_reviews": false,
+    "can_approve_pull_request_reviews": true,
     "default_workflow_permissions": "read"
   }
 }
