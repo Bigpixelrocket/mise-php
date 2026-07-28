@@ -10,6 +10,7 @@
     "scripts/admit-maintenance-plan",
     "scripts/seal-maintenance-patch",
     "scripts/validate-codex-action-inputs",
+    "scripts/validate-structured-output-schemas",
     "scripts/verify-merge-admission",
     "maintenance-events/*",
     "readiness/*",
