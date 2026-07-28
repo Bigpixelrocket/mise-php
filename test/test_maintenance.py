@@ -213,8 +213,11 @@ class MaintenanceConsumerTests(unittest.TestCase):
         self.assertIn("pr_number:", protected_workflow)
         self.assertIn("gh workflow run ci.yml", dispatcher)
         self.assertIn("gh workflow run protected-controls.yml", dispatcher)
+        self.assertIn('"repos/$repository/check-runs"', dispatcher)
+        self.assertIn("Exact-head validator passed", dispatcher)
         self.assertIn("./scripts/dispatch-pr-checks", consumer)
         self.assertNotIn("gh pr checks", consumer)
+        self.assertIn("checks: write", consumer)
 
 
 if __name__ == "__main__":
