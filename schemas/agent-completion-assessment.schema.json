@@ -1,14 +1,36 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": ["contractVersion", "instructionDigests", "phaseStatus", "criteria", "goNoGo", "unresolved", "summary"],
   "properties": {
-    "contractVersion": {"const": 1},
-    "instructionDigests": {"type": "object"},
-    "phaseStatus": {"enum": ["complete", "blocked", "needs_human"]},
-    "criteria": {"type": "array"},
-    "goNoGo": {"enum": ["go", "no_go"]},
-    "unresolved": {"type": "array"},
+    "contractVersion": {"type": "integer", "const": 1},
+    "instructionDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shared", "phaseTemplate", "eventContract"],
+      "properties": {
+        "shared": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "phaseTemplate": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "eventContract": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "phaseStatus": {"type": "string", "enum": ["complete", "blocked", "needs_human"]},
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "evidence"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"type": "string", "enum": ["passed", "failed", "unresolved"]},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "goNoGo": {"type": "string", "enum": ["go", "no_go"]},
+    "unresolved": {"type": "array", "items": {"type": "string"}},
     "summary": {"type": "string"}
   }
 }

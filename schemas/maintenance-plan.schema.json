@@ -1,41 +1,82 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": ["schemaVersion", "actionKey", "action", "agentContract", "evidence", "repositories", "preconditions", "editsRequired", "allowedPaths", "requiredChecks", "agentOperations", "budgets", "notification", "risk", "completionAssessment", "summary"],
   "properties": {
-    "schemaVersion": {"const": 1},
+    "schemaVersion": {"type": "integer", "const": 1},
     "actionKey": {"type": "string"},
-    "action": {"enum": ["no_change", "new_patch", "new_branch", "branch_eol", "repair", "reconcile_partial", "blocked", "needs_human"]},
-    "agentContract": {"type": "object"},
+    "action": {"type": "string", "enum": ["no_change", "new_patch", "new_branch", "branch_eol", "repair", "reconcile_partial", "blocked", "needs_human"]},
+    "agentContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "instructionDigests"],
+      "properties": {
+        "contractVersion": {"type": "integer", "const": 1},
+        "instructionDigests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shared", "phaseTemplate", "eventContract"],
+          "properties": {
+            "shared": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "phaseTemplate": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "eventContract": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
     "evidence": {
       "type": "array",
       "minItems": 4,
       "maxItems": 4,
       "items": {
         "type": "object",
-        "required": ["captureId", "digest", "locator"],
+        "additionalProperties": false,
+        "required": ["captureId", "digest", "claim", "locator"],
         "properties": {
-          "captureId": {"enum": ["php_bin_policy_selector", "php_bin_state", "support_policy", "policy_invariants"]},
+          "captureId": {"type": "string", "enum": ["php_bin_policy_selector", "php_bin_state", "support_policy", "policy_invariants"]},
           "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "claim": {"type": "string"},
           "locator": {
             "type": "object",
+            "additionalProperties": false,
             "required": ["kind", "value"],
             "properties": {
-              "kind": {"const": "json_pointer"},
+              "kind": {"type": "string", "const": "json_pointer"},
               "value": {"type": "string", "pattern": "^/"}
             }
           }
         }
       }
     },
-    "repositories": {"type": "array"},
-    "preconditions": {"type": "object"},
+    "repositories": {"type": "array", "items": {"type": "string", "enum": ["php-bin", "mise-php"]}, "uniqueItems": true},
+    "preconditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["misePhpHead", "phpBinPolicyCommit", "supportPolicyDigest", "policyInvariantsDigest", "phpBinOperatorCommit", "operatorState"],
+      "properties": {
+        "misePhpHead": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "phpBinPolicyCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "supportPolicyDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "policyInvariantsDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "phpBinOperatorCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "operatorState": {"type": "string", "const": "enabled"}
+      }
+    },
     "editsRequired": {"type": "boolean"},
-    "allowedPaths": {"type": "object"},
-    "requiredChecks": {"const": ["Plugin contract"]},
+    "allowedPaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mise-php"],
+      "properties": {
+        "mise-php": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "requiredChecks": {"type": "array", "items": {"type": "string"}, "const": ["Plugin contract"]},
     "agentOperations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "budgets": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["maxModelCalls", "maxRetries", "timeoutMinutes"],
       "properties": {
         "maxModelCalls": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -43,9 +84,52 @@
         "timeoutMinutes": {"type": "integer", "minimum": 1, "maximum": 60}
       }
     },
-    "notification": {"type": "object"},
-    "risk": {"type": "string"},
-    "completionAssessment": {"type": "object"},
+    "notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suggestedSeverity", "summary", "humanActionRequired"],
+      "properties": {
+        "suggestedSeverity": {"type": "string", "enum": ["info", "warning", "critical"]},
+        "summary": {"type": "string"},
+        "humanActionRequired": {"type": "boolean"}
+      }
+    },
+    "risk": {"type": "string", "enum": ["routine", "compatibility", "lifecycle", "recovery", "policy-sensitive"]},
+    "completionAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "instructionDigests", "phaseStatus", "criteria", "goNoGo", "unresolved", "summary"],
+      "properties": {
+        "contractVersion": {"type": "integer", "const": 1},
+        "instructionDigests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shared", "phaseTemplate", "eventContract"],
+          "properties": {
+            "shared": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "phaseTemplate": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "eventContract": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        },
+        "phaseStatus": {"type": "string", "enum": ["complete", "blocked", "needs_human"]},
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "evidence"],
+            "properties": {
+              "id": {"type": "string"},
+              "status": {"type": "string", "enum": ["passed", "failed", "unresolved"]},
+              "evidence": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "goNoGo": {"type": "string", "enum": ["go", "no_go"]},
+        "unresolved": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"}
+      }
+    },
     "summary": {"type": "string"}
   }
 }
