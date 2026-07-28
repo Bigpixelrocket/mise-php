@@ -24,6 +24,10 @@ Required repository state:
   explicitly request write scopes while repository-scoped Codex jobs remain
   `contents: read`.
 - Do not allow the workflow token to approve pull requests.
+- Because GitHub suppresses ordinary PR events created by `GITHUB_TOKEN`, each
+  deterministic PR coordinator explicitly dispatches `ci.yml` and
+  `protected-controls.yml` at the exact PR branch, then accepts only newly
+  created successful check runs for that head SHA.
 - Allow GitHub-owned Actions plus only `openai/codex-action` and
   `jdx/mise-action`, and require every Action reference to use a full commit
   SHA.

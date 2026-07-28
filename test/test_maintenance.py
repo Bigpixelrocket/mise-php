@@ -202,6 +202,20 @@ class MaintenanceConsumerTests(unittest.TestCase):
                     "sha256:" + "f" * 64, invariants_digest, preconditions["misePhpHead"],
                 )
 
+    def test_token_created_prs_explicitly_dispatch_required_checks(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        ci = (root / ".github/workflows/ci.yml").read_text()
+        protected_workflow = (root / ".github/workflows/protected-controls.yml").read_text()
+        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        dispatcher = (root / "scripts/dispatch-pr-checks").read_text()
+        self.assertIn("workflow_dispatch:", ci)
+        self.assertIn("workflow_dispatch:", protected_workflow)
+        self.assertIn("pr_number:", protected_workflow)
+        self.assertIn("gh workflow run ci.yml", dispatcher)
+        self.assertIn("gh workflow run protected-controls.yml", dispatcher)
+        self.assertIn("./scripts/dispatch-pr-checks", consumer)
+        self.assertNotIn("gh pr checks", consumer)
+
 
 if __name__ == "__main__":
     unittest.main()

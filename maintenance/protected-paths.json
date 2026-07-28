@@ -8,6 +8,7 @@
     "schemas/*",
     "maintenance/*",
     "scripts/admit-maintenance-plan",
+    "scripts/dispatch-pr-checks",
     "scripts/seal-maintenance-patch",
     "scripts/validate-codex-action-inputs",
     "scripts/validate-structured-output-schemas",
