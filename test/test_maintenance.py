@@ -70,6 +70,13 @@ class MaintenanceConsumerTests(unittest.TestCase):
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
 
+    def test_investigation_defers_required_checks_to_writable_jobs(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        instructions = (root / ".github/codex/maintenance/investigation.md").read_text()
+        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        self.assertIn("Treat `requiredChecks` as downstream exact-head gates", instructions)
+        self.assertIn('"required_check_execution"', consumer)
+
     def test_policy_capture_urls_are_commit_pinned(self):
         sha = "a" * 40
         policy, invariants = pinned_policy_urls(sha)

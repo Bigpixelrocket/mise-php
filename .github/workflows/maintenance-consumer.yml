@@ -75,7 +75,7 @@ jobs:
               actionKey:$actionKey,
               preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState},
               allowedAuthority:["read_repository","read_captured_policy"],
-              nonGoals:["upstream_php_classification","repository_mutation","irreversible_github_effect"],
+              nonGoals:["upstream_php_classification","repository_mutation","required_check_execution","irreversible_github_effect"],
               completionCriteria:[
                 {id:"phase-goal-correct",requirement:"The goal matches exact inputs.",evidenceRequired:"Exact preconditions."},
                 {id:"policy-difference-explained",requirement:"Every required local change is bound to captured policy.",evidenceRequired:"Policy digest and JSON locator."},
