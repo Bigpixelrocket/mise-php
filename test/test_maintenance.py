@@ -75,7 +75,13 @@ class MaintenanceConsumerTests(unittest.TestCase):
         instructions = (root / ".github/codex/maintenance/investigation.md").read_text()
         consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
         self.assertIn("Treat `requiredChecks` as downstream exact-head gates", instructions)
-        self.assertIn('"required_check_execution"', consumer)
+        self.assertIn("do not run them in this read-only", instructions)
+        self.assertIn("not-yet-run status as unresolved", instructions)
+        self.assertIn(
+            'nonGoals:["upstream_php_classification","repository_mutation",'
+            '"required_check_execution","irreversible_github_effect"]',
+            consumer,
+        )
 
     def test_policy_capture_urls_are_commit_pinned(self):
         sha = "a" * 40
