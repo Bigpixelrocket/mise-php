@@ -9,6 +9,11 @@ artifact installation, or readiness state must change. Cite exact public policy
 commit and digests. Do not independently fetch or classify upstream PHP data.
 Return GO only when every criterion passes and unresolved is empty.
 
+Treat `requiredChecks` as downstream exact-head gates, not investigation-phase
+advisory checks. Declare them in the plan, but do not run them in this read-only
+phase or treat their not-yet-run status as unresolved; writable deterministic
+jobs execute them before merge.
+
 The plan must cite each of the four records in `policy-capture.json` exactly
 once. Each evidence item has `captureId`, the captured `digest`, and a
 `locator` with `kind: json_pointer` and a resolving JSON Pointer `value`.
