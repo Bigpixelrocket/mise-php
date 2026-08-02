@@ -4,11 +4,11 @@ import tempfile
 import unittest
 import json
 
-from maintenance.admission import AdmissionError, admit, digest_file, protected, verify_merge
-from maintenance.consumer import compare, digest, pinned_policy_urls, readiness, write
+from autorelease.admission import AdmissionError, admit, digest_file, protected, verify_merge
+from autorelease.consumer import compare, digest, pinned_policy_urls, readiness, write
 
 
-class MaintenanceConsumerTests(unittest.TestCase):
+class AutoreleaseConsumerTests(unittest.TestCase):
     def test_opaque_policy_comparison(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -63,17 +63,17 @@ class MaintenanceConsumerTests(unittest.TestCase):
 
     def test_protected_controls_are_not_admissible(self):
         self.assertTrue(protected(".github/codex-action-contract.json"))
-        self.assertTrue(protected(".github/workflows/maintenance.yml"))
-        self.assertTrue(protected("maintenance/admission.py"))
+        self.assertTrue(protected(".github/workflows/autorelease.yml"))
+        self.assertTrue(protected("autorelease/admission.py"))
         self.assertTrue(protected("scripts/validate-codex-action-inputs"))
-        self.assertTrue(protected("maintenance-events/new-patch.json"))
+        self.assertTrue(protected("autorelease-events/new-patch.json"))
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
 
     def test_investigation_defers_required_checks_to_writable_jobs(self):
         root = pathlib.Path(__file__).resolve().parents[1]
-        instructions = (root / ".github/codex/maintenance/investigation.md").read_text()
-        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        instructions = (root / ".github/codex/autorelease/investigation.md").read_text()
+        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
         self.assertIn("Treat `requiredChecks` as downstream exact-head gates", instructions)
         self.assertIn("do not run them in this read-only", instructions)
         self.assertIn("not-yet-run status as unresolved", instructions)
@@ -87,7 +87,7 @@ class MaintenanceConsumerTests(unittest.TestCase):
         sha = "a" * 40
         policy, invariants = pinned_policy_urls(sha)
         self.assertIn(f"/{sha}/support-policy.json", policy)
-        self.assertIn(f"/{sha}/maintenance/policy-invariants.json", invariants)
+        self.assertIn(f"/{sha}/autorelease/policy-invariants.json", invariants)
         with self.assertRaises(Exception):
             pinned_policy_urls("main")
 
@@ -219,7 +219,7 @@ class MaintenanceConsumerTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         ci = (root / ".github/workflows/ci.yml").read_text()
         protected_workflow = (root / ".github/workflows/protected-controls.yml").read_text()
-        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
         dispatcher = (root / "scripts/dispatch-pr-checks").read_text()
         self.assertIn("workflow_dispatch:", ci)
         self.assertIn("workflow_dispatch:", protected_workflow)

@@ -79,7 +79,7 @@ def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
         raise ConsumerError("policy capture URL is outside the reviewed HTTPS allowlist")
     request = urllib.request.Request(
         url,
-        headers={"Accept": "application/json", "User-Agent": "bigpixelrocket-maintenance/1"},
+        headers={"Accept": "application/json", "User-Agent": "bigpixelrocket-autorelease/1"},
     )
     opener = urllib.request.build_opener(RestrictedRedirect)
     last_error: Exception | None = None
@@ -112,7 +112,7 @@ def pinned_policy_urls(commit_sha: str) -> tuple[str, str]:
         raise ConsumerError("php-bin main state has no exact commit")
     return (
         f"{RAW_ROOT}/{commit_sha}/support-policy.json",
-        f"{RAW_ROOT}/{commit_sha}/maintenance/policy-invariants.json",
+        f"{RAW_ROOT}/{commit_sha}/autorelease/policy-invariants.json",
     )
 
 
@@ -350,7 +350,7 @@ def main() -> int:
             print(json.dumps(result))
         return 0
     except (ConsumerError, OSError, json.JSONDecodeError) as error:
-        print(f"maintenance consumer rejected input: {error}", file=sys.stderr)
+        print(f"autorelease consumer rejected input: {error}", file=sys.stderr)
         return 1
 
 
