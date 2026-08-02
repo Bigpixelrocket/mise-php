@@ -116,8 +116,8 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             self.assertEqual(urls[0], fetch_first_url(urls, output)["url"])
         fetch.assert_called_once_with(urls[0], output)
 
-        # The pinned policy commit predates the rename, so the older path must
-        # still resolve rather than fail the capture.
+        # The pin can target any historical php-bin layout, so a superseded
+        # invariants path must still resolve rather than fail the capture.
         absent = [CaptureAbsent("absent"), {"url": urls[1]}]
         with mock.patch.object(consumer, "fetch_url", side_effect=absent) as fetch:
             self.assertEqual(urls[1], fetch_first_url(urls, output)["url"])

@@ -118,12 +118,18 @@ def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
 def fetch_first_url(urls: tuple[str, ...], output: pathlib.Path) -> dict[str, Any]:
     """Capture the first published path, recording which one supplied the bytes.
 
-    Policy captures pin to the commit that last touched `support-policy.json`,
-    not to php-bin main. That commit still predates the maintenance-to-autorelease
-    rename, so the invariants it publishes remain at the pre-rename path. Only a
-    404 falls through, so a transport failure still raises instead of silently
-    reaching for the older document. Drop every path but the first once a commit
-    that touches `support-policy.json` has landed after the rename.
+    Captures pin to the commit that last changed `support-policy.json`, because
+    that document binds itself to its invariants by digest and the two only
+    agree within the tree php-bin reviewed them in. Pinning to the newest change
+    of either document instead would pair new invariants with a policy still
+    carrying the previous digest, which `compare` rejects.
+
+    That commit can be arbitrarily old, and php-bin has moved this file before,
+    so the invariants path is whatever the layout was at the time. This list is
+    permanent compatibility with historical layouts, newest first: extend it on
+    the next move rather than expecting to shorten it. Only a 404 falls through,
+    so a transport failure still raises instead of reaching for an older
+    document.
     """
     for url in urls[:-1]:
         try:
