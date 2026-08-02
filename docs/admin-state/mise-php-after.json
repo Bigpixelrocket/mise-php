@@ -71,28 +71,28 @@
     },
     "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/branches/main/protection"
   },
-  "capturedAt": "2026-07-28T13:05:44Z",
+  "capturedAt": "2026-08-02T19:49:28Z",
   "environments": {
     "environments": [
       {
         "can_admins_bypass": false,
-        "created_at": "2026-07-27T09:10:07Z",
+        "created_at": "2026-08-02T18:43:56Z",
         "deployment_branch_policy": {
           "custom_branch_policies": false,
           "protected_branches": true
         },
         "html_url": "https://github.com/Bigpixelrocket/mise-php/deployments/activity_log?environments_filter=php-autorelease-publish",
-        "id": 18804850284,
+        "id": 19168660079,
         "name": "php-autorelease-publish",
-        "node_id": "EN_kwDOTj2ybM8AAAAEYNs-bA",
+        "node_id": "EN_kwDOTj2ybM8AAAAEdoqKbw",
         "protection_rules": [
           {
-            "id": 60997412,
-            "node_id": "GA_kwDOTj2ybM4Dor8k",
+            "id": 61575465,
+            "node_id": "GA_kwDOTj2ybM4Dq5Ep",
             "type": "branch_policy"
           }
         ],
-        "updated_at": "2026-07-27T10:08:07Z",
+        "updated_at": "2026-08-02T18:43:56Z",
         "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/environments/php-autorelease-publish"
       }
     ],
@@ -104,6 +104,7 @@
   },
   "labels": [
     "attention-required",
+    "autorelease",
     "bug",
     "dependencies",
     "documentation",
@@ -113,11 +114,10 @@
     "good first issue",
     "help wanted",
     "invalid",
-    "autorelease",
     "question",
     "wontfix"
   ],
-  "repository": "Bigpixelrocket/mise-php",
+  "repository": "bigpixelrocket/mise-php",
   "repositorySettings": {
     "allow_auto_merge": true,
     "allow_merge_commit": false,
@@ -161,7 +161,7 @@
     ],
     "verified_allowed": false
   },
-  "snapshotDigest": "sha256:e50672433148e1054cd0436af11f47cbc7bf643db650eaed166ffcd1633fa632",
+  "snapshotDigest": "sha256:fcdf015fdf96ade8375f29367251f35fec22e14952fd9abe46fecb63ec05f8c9",
   "variables": [
     "AUTORELEASE_OWNER"
   ],
