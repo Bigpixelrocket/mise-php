@@ -3,12 +3,16 @@ import subprocess
 import tempfile
 import unittest
 import json
+from unittest import mock
 
+from autorelease import consumer
 from autorelease.admission import AdmissionError, admit, digest_file, protected, verify_merge
 from autorelease.consumer import (
+    CaptureAbsent,
     ConsumerError,
     compare,
     digest,
+    fetch_first_url,
     pinned_policy_urls,
     readiness,
     write,
@@ -95,11 +99,34 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         policy, invariants = pinned_policy_urls(sha)
         self.assertIn(f"/{sha}/support-policy.json", policy)
         self.assertEqual(
-            f"/{sha}/autorelease/policy-invariants.json",
-            invariants.split("/php-bin")[-1],
+            [
+                f"/{sha}/autorelease/policy-invariants.json",
+                f"/{sha}/maintenance/policy-invariants.json",
+            ],
+            [url.split("/php-bin")[-1] for url in invariants],
         )
         with self.assertRaises(ConsumerError):
             pinned_policy_urls("main")
+
+    def test_policy_invariants_capture_prefers_the_current_path(self):
+        urls = ("https://example.invalid/new.json", "https://example.invalid/old.json")
+        output = pathlib.Path("unused.json")
+
+        with mock.patch.object(consumer, "fetch_url", return_value={"url": urls[0]}) as fetch:
+            self.assertEqual(urls[0], fetch_first_url(urls, output)["url"])
+        fetch.assert_called_once_with(urls[0], output)
+
+        # The pinned policy commit predates the rename, so the older path must
+        # still resolve rather than fail the capture.
+        absent = [CaptureAbsent("absent"), {"url": urls[1]}]
+        with mock.patch.object(consumer, "fetch_url", side_effect=absent) as fetch:
+            self.assertEqual(urls[1], fetch_first_url(urls, output)["url"])
+        self.assertEqual(2, fetch.call_count)
+
+        # A transport failure must surface rather than reach for the older path.
+        with mock.patch.object(consumer, "fetch_url", side_effect=ConsumerError("timeout")):
+            with self.assertRaises(ConsumerError):
+                fetch_first_url(urls, output)
 
     def test_merge_gate_binds_single_commit_diff_and_preconditions(self):
         with tempfile.TemporaryDirectory() as temporary:
