@@ -215,10 +215,12 @@ jobs:
           allow-bot-users: github-actions[bot]
           codex-args: '["--strict-config","--ephemeral","--output-schema","schemas/agent-completion-assessment.schema.json"]'
       - name: Seal admitted diff
+        env:
+          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
           ./scripts/seal-autorelease-patch \
             --repo . \
-            --base "${{ needs.investigate.outputs.base_sha }}" \
+            --base "$BASE_SHA" \
             --plan autorelease-run/implementation-plan.json \
             --result autorelease-run/implementation-result.json \
             --contract autorelease-run/implementation-contract.json \
@@ -272,6 +274,8 @@ jobs:
           fi
       - name: Create reproducible validated commit bundle
         if: steps.checks.outputs.passed == 'true'
+        env:
+          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
           export GIT_AUTHOR_NAME=autorelease-validator
           export GIT_AUTHOR_EMAIL=autorelease@invalid
@@ -282,7 +286,7 @@ jobs:
           git commit -m "chore: apply admitted autorelease patch"
           jq -n --arg headSha "$(git rev-parse HEAD)" --arg tree "$(git rev-parse HEAD^{tree})" \
             '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
-          git bundle create autorelease-run/validated.bundle HEAD "^${{ needs.investigate.outputs.base_sha }}"
+          git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: steps.checks.outputs.passed == 'true'
         with:
@@ -367,11 +371,13 @@ jobs:
           allow-bot-users: github-actions[bot]
           codex-args: '["--strict-config","--ephemeral","--output-schema","schemas/agent-completion-assessment.schema.json"]'
       - name: Seal combined repaired diff
+        env:
+          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
           mv autorelease-run/repair-plan.json autorelease-run/implementation-plan.json
           ./scripts/seal-autorelease-patch \
             --repo . \
-            --base "${{ needs.investigate.outputs.base_sha }}" \
+            --base "$BASE_SHA" \
             --plan autorelease-run/implementation-plan.json \
             --result autorelease-run/repair-result.json \
             --contract autorelease-run/repair-contract.json \
@@ -413,6 +419,8 @@ jobs:
           cp autorelease-run/sealed-repair/sealed.patch autorelease-run/sealed/sealed.patch
           cp autorelease-run/sealed-repair/patch-manifest.json autorelease-run/sealed/patch-manifest.json
       - name: Create repaired validated commit bundle
+        env:
+          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
           export GIT_AUTHOR_NAME=autorelease-validator
           export GIT_AUTHOR_EMAIL=autorelease@invalid
@@ -423,7 +431,7 @@ jobs:
           git commit -m "chore: apply admitted autorelease repair"
           jq -n --arg headSha "$(git rev-parse HEAD)" --arg tree "$(git rev-parse HEAD^{tree})" \
             '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
-          git bundle create autorelease-run/validated.bundle HEAD "^${{ needs.investigate.outputs.base_sha }}"
+          git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mise-validated-autorelease-patch-${{ github.run_id }}
@@ -463,6 +471,10 @@ jobs:
           git checkout --detach "$validated"
           test "$(git rev-parse HEAD)" = "$validated"
           action_key="$(jq -r .actionKey autorelease-run/implementation-plan.json)"
+          # The plan is model-authored. Admission already rejects a malformed
+          # action key, but this value reaches $GITHUB_OUTPUT and later shell
+          # steps, so its alphabet is re-asserted at the boundary.
+          [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
           branch="autorelease/$(printf '%s' "$action_key" | tr ':/' '--')"
           gh auth setup-git
           git push origin "HEAD:refs/heads/$branch"
@@ -477,14 +489,15 @@ jobs:
       - name: Enforce checks and exact validated SHA
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.patch.outputs.number }}
         run: |
           ./scripts/dispatch-pr-checks \
-            --pr "${{ steps.patch.outputs.number }}" \
+            --pr "$PR_NUMBER" \
             --check "Plugin contract" \
             --output autorelease-run/pr-checks.json
           jq -e '[.[] | select(.name=="Plugin contract") | .bucket] == ["pass"]' autorelease-run/pr-checks.json
           expected="$(jq -r .headSha autorelease-run/validation.json)"
-          actual="$(gh pr view "${{ steps.patch.outputs.number }}" --json headRefOid --jq .headRefOid)"
+          actual="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
           test "$actual" = "$expected"
           test "$(git rev-parse HEAD)" = "$expected"
           git fetch origin main
@@ -535,25 +548,28 @@ jobs:
       - name: Merge exact admitted patch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge "${{ steps.patch.outputs.number }}" --squash --delete-branch
+          PR_NUMBER: ${{ steps.patch.outputs.number }}
+        run: gh pr merge "$PR_NUMBER" --squash --delete-branch
       - name: Create readiness record at the merged implementation commit
         id: readiness
         env:
           GH_TOKEN: ${{ github.token }}
+          ACTION_KEY: ${{ steps.patch.outputs.action_key }}
+          PR_NUMBER: ${{ steps.patch.outputs.number }}
         run: |
-          merged="$(gh pr view "${{ steps.patch.outputs.number }}" --json mergeCommit --jq .mergeCommit.oid)"
+          merged="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$merged"
           test "$(git rev-parse "$merged^{tree}")" = "$(jq -r .tree autorelease-run/validation.json)"
           git checkout -B autorelease/readiness-${{ github.run_id }} origin/main
           base="$(git rev-parse HEAD)"
           mkdir -p readiness
-          filename="$(printf '%s' "${{ steps.patch.outputs.action_key }}" | tr ':/' '--').json"
+          filename="$(printf '%s' "$ACTION_KEY" | tr ':/' '--').json"
           mapfile -t digests < <(jq -r '.captures[].digest' autorelease-run/policy-capture.json)
           args=()
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done
           ./scripts/consume-php-policy readiness \
-            --action-key "${{ steps.patch.outputs.action_key }}" \
+            --action-key "$ACTION_KEY" \
             --php-bin-commit "$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/implementation-plan.json)" \
             --policy-digest "$(jq -r .preconditions.supportPolicyDigest autorelease-run/implementation-plan.json)" \
             --policy-invariants-digest "$(jq -r .preconditions.policyInvariantsDigest autorelease-run/implementation-plan.json)" \
@@ -562,11 +578,11 @@ jobs:
             --output "readiness/$filename"
           git add "readiness/$filename"
           git -c user.name=autorelease-readiness -c user.email=autorelease@invalid \
-            commit -m "chore: record ${{ steps.patch.outputs.action_key }} readiness"
+            commit -m "chore: record $ACTION_KEY readiness"
           gh auth setup-git
           git push origin HEAD
           url="$(gh pr create --base main --head "autorelease/readiness-${{ github.run_id }}" \
-            --title "chore: record ${{ steps.patch.outputs.action_key }} readiness" \
+            --title "chore: record $ACTION_KEY readiness" \
             --body "Deterministic readiness record for the exact merged implementation commit.")"
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
           echo "base_sha=$base" >> "$GITHUB_OUTPUT"
