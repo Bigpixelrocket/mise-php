@@ -38,6 +38,10 @@ class ConsumerError(RuntimeError):
     pass
 
 
+class CaptureAbsent(ConsumerError):
+    """The capture URL resolved but the document is not published at that path."""
+
+
 class RestrictedRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
         old = urllib.parse.urlparse(req.full_url)
@@ -79,7 +83,7 @@ def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
         raise ConsumerError("policy capture URL is outside the reviewed HTTPS allowlist")
     request = urllib.request.Request(
         url,
-        headers={"Accept": "application/json", "User-Agent": "bigpixelrocket-maintenance/1"},
+        headers={"Accept": "application/json", "User-Agent": "bigpixelrocket-autorelease/1"},
     )
     opener = urllib.request.build_opener(RestrictedRedirect)
     last_error: Exception | None = None
@@ -102,17 +106,40 @@ def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
                     "digest": digest(body),
                     "bodyPath": output.name,
                 }
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                raise CaptureAbsent(f"policy capture path is not published: {url}") from error
+            last_error = error
         except (OSError, urllib.error.URLError, json.JSONDecodeError, ConsumerError) as error:
             last_error = error
     raise ConsumerError(f"policy capture failed after bounded retries: {type(last_error).__name__}")
 
 
-def pinned_policy_urls(commit_sha: str) -> tuple[str, str]:
+def fetch_first_url(urls: tuple[str, ...], output: pathlib.Path) -> dict[str, Any]:
+    """Capture the first published path, recording which one supplied the bytes.
+
+    php-bin main keeps the pre-rename `maintenance/` path until its own
+    autorelease change merges. Only a 404 falls through, so a transport failure
+    still raises instead of silently reaching for the older document. Drop every
+    path but the first once php-bin main has landed.
+    """
+    for url in urls[:-1]:
+        try:
+            return fetch_url(url, output)
+        except CaptureAbsent:
+            continue
+    return fetch_url(urls[-1], output)
+
+
+def pinned_policy_urls(commit_sha: str) -> tuple[str, tuple[str, ...]]:
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ConsumerError("php-bin main state has no exact commit")
     return (
         f"{RAW_ROOT}/{commit_sha}/support-policy.json",
-        f"{RAW_ROOT}/{commit_sha}/maintenance/policy-invariants.json",
+        (
+            f"{RAW_ROOT}/{commit_sha}/autorelease/policy-invariants.json",
+            f"{RAW_ROOT}/{commit_sha}/maintenance/policy-invariants.json",
+        ),
     )
 
 
@@ -130,7 +157,7 @@ def fetch_policy_set(
     if not isinstance(selected, list) or len(selected) != 1:
         raise ConsumerError("php-bin policy commit selector is empty or ambiguous")
     commit_sha = selected[0].get("sha", "")
-    policy_url, invariants_url = pinned_policy_urls(commit_sha)
+    policy_url, invariants_urls = pinned_policy_urls(commit_sha)
     commit_capture = {
         "captureId": "php_bin_state",
         **fetch_url(f"{POLICY_COMMIT_ROOT}/{commit_sha}", commit_output),
@@ -139,7 +166,7 @@ def fetch_policy_set(
         selector_capture,
         commit_capture,
         {"captureId": "support_policy", **fetch_url(policy_url, policy_output)},
-        {"captureId": "policy_invariants", **fetch_url(invariants_url, invariants_output)},
+        {"captureId": "policy_invariants", **fetch_first_url(invariants_urls, invariants_output)},
     ]
 
 
@@ -350,7 +377,7 @@ def main() -> int:
             print(json.dumps(result))
         return 0
     except (ConsumerError, OSError, json.JSONDecodeError) as error:
-        print(f"maintenance consumer rejected input: {error}", file=sys.stderr)
+        print(f"autorelease consumer rejected input: {error}", file=sys.stderr)
         return 1
 
 

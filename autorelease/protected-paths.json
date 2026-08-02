@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "patterns": [
-    ".github/codex/maintenance/*",
+    ".github/codex/autorelease/*",
     ".github/codex-action-contract.json",
     ".github/workflows/*",
     ".codex/*",
     "schemas/*",
-    "maintenance/*",
-    "scripts/admit-maintenance-plan",
+    "autorelease/*",
+    "scripts/admit-autorelease-plan",
     "scripts/dispatch-pr-checks",
-    "scripts/seal-maintenance-patch",
+    "scripts/seal-autorelease-patch",
     "scripts/validate-codex-action-inputs",
     "scripts/validate-structured-output-schemas",
     "scripts/verify-merge-admission",
-    "maintenance-events/*",
+    "autorelease-events/*",
     "readiness/*",
     ".github/CODEOWNERS"
   ]

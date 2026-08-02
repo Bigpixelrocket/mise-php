@@ -49,7 +49,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          PROTECTED_REVIEWER: ${{ vars.MAINTENANCE_OWNER }}
+          PROTECTED_REVIEWER: ${{ vars.AUTORELEASE_OWNER }}
         run: |
           python3 - <<'PY'
           import fnmatch
@@ -75,7 +75,7 @@ jobs:
           number = os.environ["PR_NUMBER"]
           head = os.environ["HEAD_SHA"]
           reviewer = os.environ["PROTECTED_REVIEWER"].lower()
-          manifest = json.loads(pathlib.Path("maintenance/protected-paths.json").read_text())
+          manifest = json.loads(pathlib.Path("autorelease/protected-paths.json").read_text())
           patterns = manifest["patterns"]
           files = api(f"repos/{repo}/pulls/{number}/files")
           protected = sorted(

@@ -1,7 +1,7 @@
 # Repository settings
 
 The plan executor applies this state with the protected
-`php-bin/scripts/configure-github-maintenance` command and verifies it with
+`php-bin/scripts/configure-github-autorelease` command and verifies it with
 `php-bin/scripts/snapshot-github-admin-state`. Snapshots are redacted: only
 secret names are retained.
 
@@ -11,7 +11,7 @@ Required repository state:
 - Require the `Plugin contract` status check.
 - Require the base-controlled `Protected controls` status check. It passes
   automatically for unprotected generated paths and requires an exact-head
-  `loadinglucian` approval for any path in `maintenance/protected-paths.json`.
+  `loadinglucian` approval for any path in `autorelease/protected-paths.json`.
 - Bind the required check to the GitHub Actions app, preventing another app
   from satisfying the same context name.
 - Require conversation resolution.
@@ -33,9 +33,9 @@ Required repository state:
 - Allow GitHub-owned Actions plus only `openai/codex-action` and
   `jdx/mise-action`, and require every Action reference to use a full commit
   SHA.
-- Create the protected `php-maintenance-release` environment.
+- Create the protected `php-autorelease-publish` environment.
 - Enable GitHub immutable releases for future repository releases.
-- Set `MAINTENANCE_OWNER=loadinglucian`.
+- Set `AUTORELEASE_OWNER=loadinglucian`.
 - Keep a distinct repository-scoped `OPENAI_API_KEY` secret.
 
 CODEOWNERS protects agent instructions, workflows, schemas, admission, sealing,
@@ -48,7 +48,7 @@ still rejects event/readiness paths as agent-authored changes.
   --repo bigpixelrocket/mise-php \
   --output mise-php/docs/admin-state/mise-php.json
 
-./php-bin/scripts/configure-github-maintenance \
+./php-bin/scripts/configure-github-autorelease \
   --repo bigpixelrocket/mise-php \
   --owner loadinglucian \
   --required-check "Plugin contract"

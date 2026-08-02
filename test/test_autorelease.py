@@ -3,12 +3,23 @@ import subprocess
 import tempfile
 import unittest
 import json
+from unittest import mock
 
-from maintenance.admission import AdmissionError, admit, digest_file, protected, verify_merge
-from maintenance.consumer import compare, digest, pinned_policy_urls, readiness, write
+from autorelease import consumer
+from autorelease.admission import AdmissionError, admit, digest_file, protected, verify_merge
+from autorelease.consumer import (
+    CaptureAbsent,
+    ConsumerError,
+    compare,
+    digest,
+    fetch_first_url,
+    pinned_policy_urls,
+    readiness,
+    write,
+)
 
 
-class MaintenanceConsumerTests(unittest.TestCase):
+class AutoreleaseConsumerTests(unittest.TestCase):
     def test_opaque_policy_comparison(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -63,17 +74,17 @@ class MaintenanceConsumerTests(unittest.TestCase):
 
     def test_protected_controls_are_not_admissible(self):
         self.assertTrue(protected(".github/codex-action-contract.json"))
-        self.assertTrue(protected(".github/workflows/maintenance.yml"))
-        self.assertTrue(protected("maintenance/admission.py"))
+        self.assertTrue(protected(".github/workflows/autorelease-consumer.yml"))
+        self.assertTrue(protected("autorelease/admission.py"))
         self.assertTrue(protected("scripts/validate-codex-action-inputs"))
-        self.assertTrue(protected("maintenance-events/new-patch.json"))
+        self.assertTrue(protected("autorelease-events/new-patch.json"))
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
 
     def test_investigation_defers_required_checks_to_writable_jobs(self):
         root = pathlib.Path(__file__).resolve().parents[1]
-        instructions = (root / ".github/codex/maintenance/investigation.md").read_text()
-        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        instructions = (root / ".github/codex/autorelease/investigation.md").read_text()
+        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
         self.assertIn("Treat `requiredChecks` as downstream exact-head gates", instructions)
         self.assertIn("do not run them in this read-only", instructions)
         self.assertIn("not-yet-run status as unresolved", instructions)
@@ -87,9 +98,33 @@ class MaintenanceConsumerTests(unittest.TestCase):
         sha = "a" * 40
         policy, invariants = pinned_policy_urls(sha)
         self.assertIn(f"/{sha}/support-policy.json", policy)
-        self.assertIn(f"/{sha}/maintenance/policy-invariants.json", invariants)
-        with self.assertRaises(Exception):
+        self.assertEqual(
+            [
+                f"/{sha}/autorelease/policy-invariants.json",
+                f"/{sha}/maintenance/policy-invariants.json",
+            ],
+            [url.split("/php-bin")[-1] for url in invariants],
+        )
+        with self.assertRaises(ConsumerError):
             pinned_policy_urls("main")
+
+    def test_policy_invariants_capture_prefers_the_current_path(self):
+        urls = ("https://example.invalid/new.json", "https://example.invalid/old.json")
+        output = pathlib.Path("unused.json")
+
+        with mock.patch.object(consumer, "fetch_url", return_value={"url": urls[0]}) as fetch:
+            self.assertEqual(urls[0], fetch_first_url(urls, output)["url"])
+        fetch.assert_called_once_with(urls[0], output)
+
+        absent = [CaptureAbsent("absent"), {"url": urls[1]}]
+        with mock.patch.object(consumer, "fetch_url", side_effect=absent) as fetch:
+            self.assertEqual(urls[1], fetch_first_url(urls, output)["url"])
+        self.assertEqual(2, fetch.call_count)
+
+        # A transport failure must surface rather than reach for the older path.
+        with mock.patch.object(consumer, "fetch_url", side_effect=ConsumerError("timeout")):
+            with self.assertRaises(ConsumerError):
+                fetch_first_url(urls, output)
 
     def test_merge_gate_binds_single_commit_diff_and_preconditions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -219,7 +254,7 @@ class MaintenanceConsumerTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         ci = (root / ".github/workflows/ci.yml").read_text()
         protected_workflow = (root / ".github/workflows/protected-controls.yml").read_text()
-        consumer = (root / ".github/workflows/maintenance-consumer.yml").read_text()
+        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
         dispatcher = (root / "scripts/dispatch-pr-checks").read_text()
         self.assertIn("workflow_dispatch:", ci)
         self.assertIn("workflow_dispatch:", protected_workflow)

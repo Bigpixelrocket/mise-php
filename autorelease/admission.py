@@ -133,12 +133,12 @@ def admit(
         "no_change", "new_patch", "new_branch", "branch_eol", "repair",
         "reconcile_partial", "blocked", "needs_human",
     }:
-        raise AdmissionError("invalid maintenance action")
+        raise AdmissionError("invalid autorelease action")
     if plan.get("action") in {"blocked", "needs_human"}:
         raise AdmissionError("no-go plan cannot advance")
     action_key = plan.get("actionKey", "")
     if not ACTION_KEY_RE.fullmatch(action_key):
-        raise AdmissionError("invalid maintenance action key")
+        raise AdmissionError("invalid autorelease action key")
     if action_key != contract.get("actionKey"):
         raise AdmissionError("plan action key changed from the event contract")
     if action_key.startswith("new_branch:") and plan.get("action") != "new_branch":
@@ -495,7 +495,7 @@ def main() -> int:
         print(json.dumps(value))
         return 0
     except (AdmissionError, OSError, subprocess.CalledProcessError) as error:
-        print(f"mise maintenance admission rejected: {error}", file=sys.stderr)
+        print(f"mise autorelease admission rejected: {error}", file=sys.stderr)
         return 1
 
 

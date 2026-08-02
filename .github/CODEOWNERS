@@ -3,10 +3,10 @@
 /.github/workflows/ @loadinglucian
 /.github/CODEOWNERS @loadinglucian
 /.codex/ @loadinglucian
-/maintenance/ @loadinglucian
+/autorelease/ @loadinglucian
 /schemas/ @loadinglucian
-/scripts/admit-maintenance-plan @loadinglucian
-/scripts/seal-maintenance-patch @loadinglucian
+/scripts/admit-autorelease-plan @loadinglucian
+/scripts/seal-autorelease-patch @loadinglucian
 /scripts/validate-codex-action-inputs @loadinglucian
 /scripts/validate-structured-output-schemas @loadinglucian
 /scripts/verify-merge-admission @loadinglucian
