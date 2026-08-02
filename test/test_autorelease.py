@@ -105,7 +105,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             ],
             [url.split("/php-bin")[-1] for url in invariants],
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(ConsumerError):
             pinned_policy_urls("main")
 
     def test_policy_invariants_capture_prefers_the_current_path(self):
