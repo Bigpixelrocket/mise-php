@@ -31,15 +31,11 @@ jobs:
           path: php-operator-control
           sparse-checkout: |
             .github/autorelease-operator.json
-            .github/maintenance-operator.json
           persist-credentials: false
       - name: Bind investigation to the live operator control
         id: operator
         run: |
-          # php-bin main still carries the pre-rename filename until its own
-          # autorelease PR merges. Drop this fallback once that has landed.
           operator="php-operator-control/.github/autorelease-operator.json"
-          test -f "$operator" || operator="php-operator-control/.github/maintenance-operator.json"
           state="$(jq -r .unattendedMutation "$operator")"
           test "$state" = "paused" || test "$state" = "enabled"
           echo "state=$state" >> "$GITHUB_OUTPUT"
@@ -513,18 +509,7 @@ jobs:
           admitted_operator_commit="$(jq -r .preconditions.phpBinOperatorCommit autorelease-run/implementation-plan.json)"
           admitted_operator_state="$(jq -r .preconditions.operatorState autorelease-run/implementation-plan.json)"
           current_operator_commit="$(gh api repos/Bigpixelrocket/php-bin/commits/main --jq .sha)"
-          # Same pre-rename fallback as the operator bind step above, decided by
-          # one directory listing rather than a probe. A probe's non-zero exit
-          # cannot separate "the file is absent" from "the API call failed", and
-          # a transient error must not select the legacy path.
-          operator_names="$(gh api "repos/Bigpixelrocket/php-bin/contents/.github?ref=$current_operator_commit" --jq '.[].name')"
-          if printf '%s\n' "$operator_names" | grep -qx 'autorelease-operator.json'; then
-            operator_path=".github/autorelease-operator.json"
-          else
-            printf '%s\n' "$operator_names" | grep -qx 'maintenance-operator.json'
-            operator_path=".github/maintenance-operator.json"
-          fi
-          gh api "repos/Bigpixelrocket/php-bin/contents/$operator_path?ref=$current_operator_commit" \
+          gh api "repos/Bigpixelrocket/php-bin/contents/.github/autorelease-operator.json?ref=$current_operator_commit" \
             --jq .content | base64 --decode > autorelease-run/current-operator.json
           jq -n \
             --arg misePhpHead "$admitted_mise" \
