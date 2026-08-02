@@ -51,5 +51,6 @@ still rejects event/readiness paths as agent-authored changes.
 ./php-bin/scripts/configure-github-autorelease \
   --repo bigpixelrocket/mise-php \
   --owner loadinglucian \
-  --required-check "Plugin contract"
+  --required-check "Plugin contract" \
+  --environment php-autorelease-publish
 ```
