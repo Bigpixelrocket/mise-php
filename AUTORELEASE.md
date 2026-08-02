@@ -5,11 +5,13 @@ prepares bounded repository work, and records the exact-commit readiness
 that `php-bin` requires before it may publish a new branch.
 
 The scheduled `php-bin policy consumer` captures the accepted public
-`support-policy.json` and compares only its digest and incomplete-event state
-with `support-snapshot.json`. It does not fetch or classify upstream PHP
-lifecycle data. When the exact policy changes, the repository-scoped pinned
-Codex Action produces an evidence-bound plan. Any implementation runs offline,
-without a GitHub write credential, and only against admitted paths.
+`support-policy.json` and compares it with `support-snapshot.json`: the policy
+digest, the invariants digest, the php-bin policy commit, the maintained
+branches, and any locally incomplete event. It does not fetch or classify
+upstream PHP lifecycle data. When the exact policy changes, the
+repository-scoped pinned Codex Action produces an evidence-bound plan. Any
+implementation runs offline, without a GitHub write credential, and only
+against admitted paths.
 
 ```mermaid
 flowchart TD
