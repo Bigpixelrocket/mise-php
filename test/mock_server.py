@@ -11,8 +11,10 @@ PORT = int(sys.argv[1])
 ASSET_DIR = Path(sys.argv[2]).resolve()
 VERSION = "8.4.99"
 EOL_VERSION = "8.1.99"
+FUTURE_VERSION = "9.0.1"
 ARCHIVE_NAME = f"php-{VERSION}-cli-macos-aarch64.tar.gz"
 EOL_ARCHIVE_NAME = f"php-{EOL_VERSION}-cli-macos-aarch64.tar.gz"
+FUTURE_ARCHIVE_NAME = f"php-{FUTURE_VERSION}-cli-macos-aarch64.tar.gz"
 
 
 def release_payload() -> dict:
@@ -53,6 +55,25 @@ def eol_release_payload() -> dict:
     }
 
 
+def future_release_payload() -> dict:
+    base_url = f"http://127.0.0.1:{PORT}/assets"
+    return {
+        "tag_name": FUTURE_VERSION,
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": FUTURE_ARCHIVE_NAME,
+                "browser_download_url": f"{base_url}/{FUTURE_ARCHIVE_NAME}",
+            },
+            {
+                "name": "SHA256SUMS",
+                "browser_download_url": f"{base_url}/SHA256SUMS",
+            },
+        ],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -62,7 +83,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/repos/bigpixelrocket/php-bin/releases":
-            self.send_json([release_payload(), eol_release_payload()])
+            self.send_json(
+                [release_payload(), eol_release_payload(), future_release_payload()]
+            )
             return
 
         if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{VERSION}":
@@ -71,11 +94,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{EOL_VERSION}":
             self.send_json(eol_release_payload())
             return
+        if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{FUTURE_VERSION}":
+            self.send_json(future_release_payload())
+            return
 
         asset_prefix = "/assets/"
         if path.startswith(asset_prefix):
             name = path[len(asset_prefix) :]
-            if name not in {ARCHIVE_NAME, EOL_ARCHIVE_NAME, "SHA256SUMS"}:
+            if name not in {ARCHIVE_NAME, EOL_ARCHIVE_NAME, FUTURE_ARCHIVE_NAME, "SHA256SUMS"}:
                 self.send_error(404)
                 return
 

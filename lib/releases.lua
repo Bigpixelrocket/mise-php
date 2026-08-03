@@ -1,5 +1,6 @@
 local http = require("http")
 local json = require("json")
+local policy = require("policy")
 
 local M = {}
 
@@ -47,8 +48,16 @@ end
 
 
 function M.is_supported_version(version)
-    return version:match("^8%.[2-5]%.%d+$") ~= nil
-        or version:match("^8%.[2-5]%.%d+%-[1-9]%d*$") ~= nil
+    for _, branch in ipairs(policy.maintained) do
+        local prefix = "^" .. branch:gsub("%.", "%%.") .. "%.%d+"
+        if version:match(prefix .. "$") ~= nil
+            or version:match(prefix .. "%-[1-9]%d*$") ~= nil
+        then
+            return true
+        end
+    end
+
+    return false
 end
 
 

@@ -6,6 +6,6 @@ function PLUGIN:ParseLegacyFile(ctx)
         error("failed to read " .. ctx.filepath)
     end
 
-    local version = content:match("(8%.[2-5][^%s]*)")
+    local version = content:match("(%d+%.%d+[^%s]*)")
     return { version = version }
 end
