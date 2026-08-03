@@ -15,6 +15,11 @@
     "scripts/verify-merge-admission",
     "autorelease-events/*",
     "readiness/*",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "scripts/test.sh",
+    "scripts/check-public-language.sh",
+    "scripts/consume-php-policy",
+    "scripts/generate-policy-lua",
+    "test/*"
   ]
 }

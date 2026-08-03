@@ -6,7 +6,13 @@
 /autorelease/ @loadinglucian
 /schemas/ @loadinglucian
 /scripts/admit-autorelease-plan @loadinglucian
+/scripts/dispatch-pr-checks @loadinglucian
 /scripts/seal-autorelease-patch @loadinglucian
 /scripts/validate-codex-action-inputs @loadinglucian
 /scripts/validate-structured-output-schemas @loadinglucian
 /scripts/verify-merge-admission @loadinglucian
+/scripts/test.sh @loadinglucian
+/scripts/check-public-language.sh @loadinglucian
+/scripts/consume-php-policy @loadinglucian
+/scripts/generate-policy-lua @loadinglucian
+/test/ @loadinglucian

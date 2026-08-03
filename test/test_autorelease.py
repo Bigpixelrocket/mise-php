@@ -111,6 +111,21 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
 
+    def test_gate_harness_paths_are_protected(self):
+        for path in ("scripts/test.sh", "scripts/check-public-language.sh",
+                     "scripts/consume-php-policy", "scripts/generate-policy-lua",
+                     "test/test_autorelease.py"):
+            self.assertTrue(protected(path), path)
+        # Runtime patches regenerate the policy table, so the generated file stays admissible.
+        self.assertFalse(protected("lib/policy.lua"))
+
+    def test_codeowners_covers_every_protected_script(self):
+        patterns = json.loads(pathlib.Path("autorelease/protected-paths.json").read_text())["patterns"]
+        codeowners = pathlib.Path(".github/CODEOWNERS").read_text()
+        for pattern in patterns:
+            if "*" not in pattern:
+                self.assertIn(f"/{pattern} ", codeowners, pattern)
+
     def test_secret_scanner_catches_sk_tokens(self):
         for secret in (
             "key = sk-" + "a" * 24,
