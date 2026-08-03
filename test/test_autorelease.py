@@ -5,7 +5,7 @@ import unittest
 import json
 from unittest import mock
 
-from autorelease import consumer
+from autorelease import admission, consumer
 from autorelease.admission import AdmissionError, admit, digest_file, protected, seal, verify_merge
 from autorelease.consumer import (
     CaptureAbsent,
@@ -71,6 +71,36 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         with self.assertRaises(Exception):
             readiness("new_branch:8.6", "main", "bad", "bad", "main", [])
+
+    def test_validate_readiness_record_accepts_consumer_output(self):
+        record = consumer.readiness(
+            "new_patch:8.5.9",
+            "a" * 40,
+            "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64,
+            "d" * 40,
+            ["sha256:" + "e" * 64],
+        )
+        admission.validate_readiness_record(record)
+
+    def test_validate_readiness_record_rejects_tampering(self):
+        record = consumer.readiness(
+            "new_patch:8.5.9",
+            "a" * 40,
+            "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64,
+            "d" * 40,
+            ["sha256:" + "e" * 64],
+        )
+        for corrupt in (
+            {**record, "ready": False},
+            {**record, "state": "published"},
+            {**record, "actionKey": "merge:now"},
+            {**record, "extra": 1},
+            {k: v for k, v in record.items() if k != "evidenceDigests"},
+        ):
+            with self.assertRaises(admission.AdmissionError):
+                admission.validate_readiness_record(corrupt)
 
     def test_protected_controls_are_not_admissible(self):
         self.assertTrue(protected(".github/codex-action-contract.json"))

@@ -28,6 +28,11 @@ ACTION_KEY_RE = re.compile(
     r"(?:source_unhealthy|health_failed|policy_failure|auth_failure):[0-9a-f]{8,64})$"
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+READINESS_RECORD_KEYS = {
+    "schemaVersion", "actionKey", "state", "ready", "phpBinPolicyCommit",
+    "policyDigest", "policyInvariantsDigest", "misePhpCommit",
+    "evidenceDigests", "recordedAt",
+}
 
 
 class AdmissionError(RuntimeError):
@@ -73,6 +78,32 @@ def contained_path(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
 
 def protected(path: str) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in PROTECTED)
+
+
+def validate_readiness_record(record: Any) -> None:
+    """Exact-shape check for records produced by consumer.readiness()."""
+    if not isinstance(record, dict) or set(record) != READINESS_RECORD_KEYS:
+        raise AdmissionError("readiness record has unexpected shape")
+    if record["schemaVersion"] != 1 or record["state"] != "mise_ready" or record["ready"] is not True:
+        raise AdmissionError("readiness record has invalid state")
+    if not ACTION_KEY_RE.fullmatch(str(record["actionKey"])):
+        raise AdmissionError("readiness record has invalid action key")
+    for key in ("phpBinPolicyCommit", "misePhpCommit"):
+        if not re.fullmatch(r"[0-9a-f]{40}", str(record[key])):
+            raise AdmissionError(f"readiness record {key} is not an exact SHA")
+    for key in ("policyDigest", "policyInvariantsDigest"):
+        if not SHA256_RE.fullmatch(str(record[key])):
+            raise AdmissionError(f"readiness record {key} is not a digest")
+    digests = record["evidenceDigests"]
+    if (
+        not isinstance(digests, list)
+        or not digests
+        or digests != sorted(digests)
+        or not all(isinstance(item, str) and SHA256_RE.fullmatch(item) for item in digests)
+    ):
+        raise AdmissionError("readiness record evidence digests are invalid")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(record["recordedAt"])):
+        raise AdmissionError("readiness record timestamp is invalid")
 
 
 def validate_assessment(assessment: dict, contract: dict, digests: dict) -> None:
