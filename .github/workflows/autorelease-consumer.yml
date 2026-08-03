@@ -277,7 +277,7 @@ jobs:
           test "$actual" = "$expected"
           git apply --index autorelease-run/sealed/sealed.patch
       - name: Run authoritative plugin checks without OpenAI credential
-        id: checks
+        id: run-checks
         run: |
           test -z "${OPENAI_API_KEY:-}"
           set +e
@@ -285,12 +285,12 @@ jobs:
           status="${PIPESTATUS[0]}"
           set -e
           if [[ "$status" == "0" ]]; then
-            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "status=passed" >> "$GITHUB_OUTPUT"
           else
-            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
           fi
       - name: Create reproducible validated commit bundle
-        if: steps.checks.outputs.passed == 'true'
+        if: steps.run-checks.outputs.status == 'passed'
         env:
           BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
@@ -305,7 +305,7 @@ jobs:
             '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
           git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.checks.outputs.passed == 'true'
+        if: steps.run-checks.outputs.status == 'passed'
         with:
           name: mise-validated-autorelease-patch-${{ github.run_id }}
           path: autorelease-run/
@@ -313,13 +313,21 @@ jobs:
           retention-days: 90
           include-hidden-files: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.checks.outputs.passed != 'true'
+        if: steps.run-checks.outputs.status != 'passed'
         with:
           name: mise-failed-autorelease-validation-${{ github.run_id }}
           path: autorelease-run/
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+      # Last step on purpose, exactly as in validate-repair: the merge job keys on
+      # this output and downloads the validated artifact, so a failed upload must
+      # leave `passed` unset rather than claim a validated patch is waiting. An
+      # unset output reads as not-passed to both the merge job and repair.
+      - name: Record that the patch validated
+        id: checks
+        if: steps.run-checks.outputs.status == 'passed'
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   repair:
     needs: [investigate, validate]
