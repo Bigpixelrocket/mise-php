@@ -10,16 +10,20 @@ It never compiles PHP locally.
 ## Status
 
 The plugin contract, offline end-to-end tests, and installation from published
-`php-bin` releases are verified on macOS 26 arm64. Maintained PHP releases for
-8.2 through 8.5 are available now.
+`php-bin` releases are verified on macOS 26 arm64. Run `mise ls-remote php` for
+the versions available right now.
 
 ## Requirements
 
 - macOS 26 (Tahoe) or newer on arm64 / aarch64
 - a current mise release with vfox tool-plugin support
 
-The plugin supports the maintained PHP branches 8.2 through 8.5. PHP branches
-that have reached end of life are intentionally not listed or installable.
+The plugin supports the maintained PHP branches recorded in
+[`support-snapshot.json`](support-snapshot.json), which tracks the accepted
+`php-bin` support policy automatically. Branches that have reached end of life
+are delisted, so they stop appearing in `mise ls-remote php` and stop resolving
+from a branch shorthand. Exact versions published before that point remain
+installable, because their `php-bin` releases are immutable.
 
 Other operating systems and Intel Macs receive an explicit unsupported-target
 error. Older macOS releases cannot load the published binaries.

@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Emit the reviewed completion criteria for one agent phase."""
+
+import argparse
+import json
+
+
+CRITERIA = {
+    "investigation": [
+        {
+            "id": "phase-goal-correct",
+            "requirement": "The goal matches exact inputs.",
+            "evidenceRequired": "Exact preconditions.",
+        },
+        {
+            "id": "policy-difference-explained",
+            "requirement": "Every required local change is bound to captured policy.",
+            "evidenceRequired": "Policy digest and JSON locator.",
+        },
+        {
+            "id": "authority-explicit",
+            "requirement": "Paths and checks are explicit.",
+            "evidenceRequired": "Allowed paths and required checks.",
+        },
+        {
+            "id": "no-unresolved-work",
+            "requirement": "No contradiction or stop condition remains.",
+            "evidenceRequired": "Empty unresolved list.",
+        },
+    ],
+    "implementation": [
+        {
+            "id": "phase-goal-correct",
+            "requirement": "Goal and preconditions remain exact.",
+            "evidenceRequired": "Plan digest and base SHA.",
+        },
+        {
+            "id": "admitted-diff-complete",
+            "requirement": "Diff is complete and admitted.",
+            "evidenceRequired": "Final diff and path comparison.",
+        },
+        {
+            "id": "advisory-checks-recorded",
+            "requirement": "All checks ran.",
+            "evidenceRequired": "Commands and results.",
+        },
+        {
+            "id": "no-unresolved-work",
+            "requirement": "No in-scope work remains.",
+            "evidenceRequired": "Empty unresolved list.",
+        },
+    ],
+    "repair": [
+        {
+            "id": "phase-goal-correct",
+            "requirement": "The repair goal matches the exact failure and inputs.",
+            "evidenceRequired": "Failure fingerprint and exact base.",
+        },
+        {
+            "id": "failure-cause-removed",
+            "requirement": "The named failure is removed without weakening a gate.",
+            "evidenceRequired": "Minimal admitted diff and reproduction evidence.",
+        },
+        {
+            "id": "advisory-checks-recorded",
+            "requirement": "All advisory checks ran.",
+            "evidenceRequired": "Commands and results.",
+        },
+        {
+            "id": "no-unresolved-work",
+            "requirement": "No repeated or unrelated failure remains.",
+            "evidenceRequired": "Empty unresolved list.",
+        },
+    ],
+}
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--phase", choices=sorted(CRITERIA), required=True)
+args = parser.parse_args()
+
+# Key order is contractual: the workflow injects this array verbatim, so the emitted
+# contract must stay byte-identical to the jq literals this table replaced.
+print(json.dumps(CRITERIA[args.phase]))

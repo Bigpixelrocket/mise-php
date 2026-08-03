@@ -13,6 +13,10 @@ permissions:
   contents: read
   pull-requests: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   protected-controls:
     name: Protected controls
@@ -38,6 +42,9 @@ jobs:
             echo "number=$PR_NUMBER"
             echo "head_sha=$(jq -r .head.sha "$RUNNER_TEMP/pr.json")"
             echo "base_sha=$(jq -r .base.sha "$RUNNER_TEMP/pr.json")"
+            echo "head_ref=$(jq -r .head.ref "$RUNNER_TEMP/pr.json")"
+            echo "head_repository=$(jq -r .head.repo.full_name "$RUNNER_TEMP/pr.json")"
+            echo "author=$(jq -r .user.login "$RUNNER_TEMP/pr.json")"
           } >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -49,15 +56,25 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          HEAD_REPOSITORY: ${{ steps.pr.outputs.head_repository }}
+          PR_AUTHOR: ${{ steps.pr.outputs.author }}
           PROTECTED_REVIEWER: ${{ vars.AUTORELEASE_OWNER }}
         run: |
           python3 - <<'PY'
           import fnmatch
+          import base64
           import json
           import os
           import pathlib
+          import re
           import subprocess
           import sys
+
+          sys.path.insert(0, ".")
+
+          from autorelease.admission import AdmissionError, validate_readiness_record
 
           def api(path):
               result = subprocess.run(
@@ -71,9 +88,22 @@ jobs:
                   raise RuntimeError("GitHub API returned an invalid paginated response")
               return [item for page in pages for item in page]
 
+          def api_one(path):
+              result = subprocess.run(
+                  ["gh", "api", path],
+                  check=True,
+                  text=True,
+                  stdout=subprocess.PIPE,
+              )
+              return json.loads(result.stdout)
+
           repo = os.environ["REPOSITORY"]
           number = os.environ["PR_NUMBER"]
           head = os.environ["HEAD_SHA"]
+          base = os.environ["BASE_SHA"]
+          head_ref = os.environ["HEAD_REF"]
+          head_repo = os.environ["HEAD_REPOSITORY"]
+          author = os.environ["PR_AUTHOR"]
           reviewer = os.environ["PROTECTED_REVIEWER"].lower()
           manifest = json.loads(pathlib.Path("autorelease/protected-paths.json").read_text())
           patterns = manifest["patterns"]
@@ -86,6 +116,41 @@ jobs:
           if not protected:
               print("No protected control path changed.")
               raise SystemExit(0)
+
+          readiness_run = re.fullmatch(r"autorelease/readiness-(\d+)", head_ref)
+          if (
+              len(files) == 1
+              and len(protected) == 1
+              and re.fullmatch(r"readiness/[A-Za-z0-9._-]+\.json", protected[0])
+              and readiness_run
+              and author == "github-actions[bot]"
+              and head_repo.lower() == repo.lower()
+          ):
+              commit = api_one(f"repos/{repo}/commits/{head}")
+              run = api_one(f"repos/{repo}/actions/runs/{readiness_run.group(1)}")
+              content = api_one(f"repos/{repo}/contents/{protected[0]}?ref={head}")
+              try:
+                  decoded = base64.b64decode(content["content"].replace("\n", ""), validate=True)
+                  record = json.loads(decoded)
+                  validate_readiness_record(record)
+              except (KeyError, ValueError, json.JSONDecodeError, AdmissionError) as error:
+                  print(f"Invalid readiness record: {error}", file=sys.stderr)
+                  raise SystemExit(1) from error
+              expected_filename = record["actionKey"].translate(str.maketrans({":": "-", "/": "-"})) + ".json"
+              direct_parent = [parent.get("sha") for parent in commit.get("parents", [])] == [base]
+              trusted_run = (
+                  protected[0] == f"readiness/{expected_filename}"
+                  and record["misePhpCommit"] == base
+                  and run.get("path") == ".github/workflows/autorelease-consumer.yml"
+                  and run.get("event") in {"schedule", "workflow_dispatch"}
+                  and run.get("head_branch") == "main"
+                  and run.get("status") == "in_progress"
+              )
+              if direct_parent and trusted_run:
+                  print(f"Protected readiness record approved from trusted consumer run {run['id']}.")
+                  raise SystemExit(0)
+              print("Readiness record did not come from a trusted in-progress consumer run.", file=sys.stderr)
+              raise SystemExit(1)
 
           reviews = api(f"repos/{repo}/pulls/{number}/reviews")
           approved = any(

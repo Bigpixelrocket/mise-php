@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""Deterministic admission and sealing for repository-scoped mise changes."""
+"""Deterministic admission and sealing for repository-scoped mise changes.
+
+This module imports from `autorelease.consumer`, so it is reached only as a package:
+`scripts/admit-autorelease-plan`, `scripts/seal-autorelease-patch` and
+`scripts/verify-merge-admission` are its command-line entry points.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,10 @@ import subprocess
 import sys
 from typing import Any
 
+# The admissible action-key alphabet is defined once, beside the filename mapping that
+# both repositories derive record and branch names from.
+from autorelease.consumer import ACTION_KEY_RE
+
 
 PROTECTED_PATHS = pathlib.Path(__file__).with_name("protected-paths.json")
 try:
@@ -20,14 +28,19 @@ try:
 except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
     raise RuntimeError(f"cannot load protected paths: {error}") from error
 PROHIBITED = {"merge", "push", "tag", "release", "publish", "workflow_permissions", "secret_access"}
-ACTION_KEY_RE = re.compile(
-    r"^(new_patch:\d+\.\d+\.\d+|new_branch:\d+\.\d+|"
-    r"branch_eol:\d+\.\d+:\d{4}-\d{2}-\d{2}|"
-    r"recipe_rebuild:\d+\.\d+\.\d+:[1-9]\d*|"
-    r"repair:\d+\.\d+\.\d+:[0-9a-f]{8,64}|"
-    r"(?:source_unhealthy|health_failed|policy_failure|auth_failure):[0-9a-f]{8,64})$"
+SECRET_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|\bgh[opusr]_[A-Za-z0-9]{30,}\b"
+    r"|\bsk-[A-Za-z0-9_-]{20,}\b"
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REQUIRED_PLAN_CHECKS = ["Plugin contract"]
+READINESS_RECORD_KEYS = {
+    "schemaVersion", "actionKey", "state", "ready", "phpBinPolicyCommit",
+    "policyDigest", "policyInvariantsDigest", "misePhpCommit",
+    "evidenceDigests", "recordedAt",
+}
 
 
 class AdmissionError(RuntimeError):
@@ -72,7 +85,39 @@ def contained_path(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
 
 
 def protected(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in PROTECTED)
+    """Match a repository path against the protected patterns.
+
+    fnmatchcase, not fnmatch: fnmatch runs os.path.normcase first, which makes the
+    answer depend on the host platform. Git paths are case-sensitive bytes and this
+    gate decides admission, so the comparison has to be the same everywhere.
+    """
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in PROTECTED)
+
+
+def validate_readiness_record(record: Any) -> None:
+    """Exact-shape check for records produced by consumer.readiness()."""
+    if not isinstance(record, dict) or set(record) != READINESS_RECORD_KEYS:
+        raise AdmissionError("readiness record has unexpected shape")
+    if record["schemaVersion"] != 1 or record["state"] != "mise_ready" or record["ready"] is not True:
+        raise AdmissionError("readiness record has invalid state")
+    if not ACTION_KEY_RE.fullmatch(str(record["actionKey"])):
+        raise AdmissionError("readiness record has invalid action key")
+    for key in ("phpBinPolicyCommit", "misePhpCommit"):
+        if not re.fullmatch(r"[0-9a-f]{40}", str(record[key])):
+            raise AdmissionError(f"readiness record {key} is not an exact SHA")
+    for key in ("policyDigest", "policyInvariantsDigest"):
+        if not SHA256_RE.fullmatch(str(record[key])):
+            raise AdmissionError(f"readiness record {key} is not a digest")
+    digests = record["evidenceDigests"]
+    if (
+        not isinstance(digests, list)
+        or not digests
+        or digests != sorted(digests)
+        or not all(isinstance(item, str) and SHA256_RE.fullmatch(item) for item in digests)
+    ):
+        raise AdmissionError("readiness record evidence digests are invalid")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(record["recordedAt"])):
+        raise AdmissionError("readiness record timestamp is invalid")
 
 
 def validate_assessment(assessment: dict, contract: dict, digests: dict) -> None:
@@ -232,7 +277,7 @@ def admit(
         raise AdmissionError("plan repository authority is invalid")
     if plan.get("editsRequired") is not True:
         raise AdmissionError("changed accepted policy requires a synchronized snapshot edit")
-    if plan.get("requiredChecks") != ["Plugin contract"]:
+    if plan.get("requiredChecks") != REQUIRED_PLAN_CHECKS:
         raise AdmissionError("required deterministic checks changed")
     if plan.get("risk") not in {"routine", "compatibility", "lifecycle", "recovery", "policy-sensitive"}:
         raise AdmissionError("invalid plan risk")
@@ -252,8 +297,12 @@ def admit(
             if protected(pattern):
                 raise AdmissionError(f"runtime plan admits protected path: {pattern}")
             flattened.append(pattern)
-    if not any(fnmatch.fnmatch("support-snapshot.json", pattern) for pattern in flattened):
+    if not any(fnmatch.fnmatchcase("support-snapshot.json", pattern) for pattern in flattened):
         raise AdmissionError("policy synchronization does not admit the generated support snapshot")
+    # Sealing rejects a snapshot edit whose lib/policy.lua was not regenerated, so a
+    # plan that cannot carry the regenerated file is unsatisfiable rather than risky.
+    if not any(fnmatch.fnmatchcase("lib/policy.lua", pattern) for pattern in flattened):
+        raise AdmissionError("policy synchronization does not admit the generated lib/policy.lua")
     operations = plan.get("agentOperations")
     if not isinstance(operations, list) or not all(isinstance(item, str) for item in operations):
         raise AdmissionError("agent operations must be an array of strings")
@@ -319,7 +368,7 @@ def seal(
     files = []
     for path in paths:
         candidate = repo / path
-        if protected(path) or not any(fnmatch.fnmatch(path, pattern) for pattern in allowed):
+        if protected(path) or not any(fnmatch.fnmatchcase(path, pattern) for pattern in allowed):
             raise AdmissionError(f"forbidden diff path: {path}")
         if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 2_000_000:
             raise AdmissionError(f"unsupported diff entry: {path}")
@@ -333,7 +382,7 @@ def seal(
             text = body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AdmissionError(f"diff entry is not valid UTF-8: {path}") from error
-        if re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_|\\bsk-[A-Za-z0-9_-]{20,}", text):
+        if SECRET_RE.search(text):
             raise AdmissionError(f"secret-like material in diff: {path}")
         if path == "support-snapshot.json":
             try:
@@ -365,6 +414,22 @@ def seal(
             } or snapshot.get("schemaVersion") != 1 or snapshot.get("generated") is not True:
                 raise AdmissionError("support snapshot has unknown, missing, or invalid fields")
         files.append({"path": path, "digest": digest_bytes(body), "mode": oct(mode)})
+    # The plugin filters branches through the generated lib/policy.lua, so either file
+    # changing alone would ship a filter that disagrees with the accepted snapshot.
+    if "support-snapshot.json" in paths or "lib/policy.lua" in paths:
+        maintained = load(repo / "support-snapshot.json").get("maintainedBranches", [])
+        expected_policy_lines = [
+            "-- Generated by scripts/generate-policy-lua from support-snapshot.json.",
+            "-- Do not edit by hand; regenerate when the snapshot changes.",
+            "return {",
+            "    maintained = {",
+            *[f'        "{branch}",' for branch in maintained],
+            "    },",
+            "}",
+        ]
+        policy_lua = repo / "lib" / "policy.lua"
+        if not policy_lua.is_file() or policy_lua.read_text().splitlines() != expected_policy_lines:
+            raise AdmissionError("support snapshot changed without regenerating lib/policy.lua")
     output.mkdir(parents=True, exist_ok=True)
     patch = output / "sealed.patch"
     tracked_patch = subprocess.run(
@@ -497,7 +562,3 @@ def main() -> int:
     except (AdmissionError, OSError, subprocess.CalledProcessError) as error:
         print(f"mise autorelease admission rejected: {error}", file=sys.stderr)
         return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

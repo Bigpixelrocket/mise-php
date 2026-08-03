@@ -8,6 +8,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 "$SCRIPT_DIR/check-public-language.sh"
 "$SCRIPT_DIR/validate-codex-action-inputs"
 "$SCRIPT_DIR/validate-structured-output-schemas"
+"$SCRIPT_DIR/generate-policy-lua"
+git -C "$PROJECT_ROOT" diff --exit-code lib/policy.lua
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "Plugin installation tests require macOS arm64." >&2
@@ -21,7 +23,11 @@ fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mise-php-test.XXXXXX")"
 SERVER_PID=""
+ORIGINAL_POLICY=""
 cleanup() {
+  if [[ -n "$ORIGINAL_POLICY" ]]; then
+    printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"
+  fi
   if [[ -n "$SERVER_PID" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -44,9 +50,11 @@ ARCHIVE_NAME="php-8.4.99-cli-macos-aarch64.tar.gz"
 EOL_ARCHIVE_NAME="php-8.1.99-cli-macos-aarch64.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$TEMP_DIR/assets/$ARCHIVE_NAME" -C "$TEMP_DIR/assets/package" .
 cp "$TEMP_DIR/assets/$ARCHIVE_NAME" "$TEMP_DIR/assets/$EOL_ARCHIVE_NAME"
+FUTURE_ARCHIVE_NAME="php-9.0.1-cli-macos-aarch64.tar.gz"
+cp "$TEMP_DIR/assets/$ARCHIVE_NAME" "$TEMP_DIR/assets/$FUTURE_ARCHIVE_NAME"
 (
   cd "$TEMP_DIR/assets"
-  shasum -a 256 "$ARCHIVE_NAME" "$EOL_ARCHIVE_NAME" > SHA256SUMS
+  shasum -a 256 "$ARCHIVE_NAME" "$EOL_ARCHIVE_NAME" "$FUTURE_ARCHIVE_NAME" > SHA256SUMS
 )
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
@@ -75,6 +83,19 @@ if grep -Fx "8.1.99" <<< "$AVAILABLE_VERSIONS"; then
   echo "EOL PHP release was unexpectedly listed." >&2
   exit 1
 fi
+
+# A future branch appears in listings the moment the snapshot maintains it.
+if grep -Fx "9.0.1" <<< "$AVAILABLE_VERSIONS"; then
+  echo "Unmaintained future branch was unexpectedly listed." >&2
+  exit 1
+fi
+# cleanup restores lib/policy.lua, so a failure mid-swap cannot leave it mutated.
+ORIGINAL_POLICY="$(cat "$PROJECT_ROOT/lib/policy.lua")"
+printf 'return {\n    maintained = { "8.2", "8.3", "8.4", "8.5", "9.0" },\n}\n' > "$PROJECT_ROOT/lib/policy.lua"
+FUTURE_VERSIONS="$(mise ls-remote php)"
+printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"
+grep -Fx "9.0.1" <<< "$FUTURE_VERSIONS"
+
 mise install php@8.4
 test -x "$MISE_DATA_DIR/installs/php/8.4.99/bin/php"
 mise exec php@8.4 -- php -v | grep -F "PHP 8.4.99"

@@ -5,8 +5,10 @@ with the exact local support snapshot, then produce one evidence-bound plan
 without modifying the repository.
 
 Identify whether local parsing, filtering, fixtures, documentation, temporary
-artifact installation, or readiness state must change. Cite exact public policy
-commit and digests. Do not independently fetch or classify upstream PHP data.
+artifact installation, or readiness state must change. A `support-snapshot.json`
+edit also regenerates `lib/policy.lua`, so admit both paths in the same plan.
+Cite exact public policy commit and digests. Do not independently fetch or
+classify upstream PHP data.
 Return GO only when every criterion passes and unresolved is empty.
 
 Treat `requiredChecks` as downstream exact-head gates, not investigation-phase

@@ -3,18 +3,26 @@
   "patterns": [
     ".github/codex/autorelease/*",
     ".github/codex-action-contract.json",
+    ".github/dependabot.yml",
     ".github/workflows/*",
     ".codex/*",
     "schemas/*",
     "autorelease/*",
     "scripts/admit-autorelease-plan",
+    "scripts/assert-admission-checks",
     "scripts/dispatch-pr-checks",
+    "scripts/prepare-agent-task",
     "scripts/seal-autorelease-patch",
     "scripts/validate-codex-action-inputs",
     "scripts/validate-structured-output-schemas",
     "scripts/verify-merge-admission",
     "autorelease-events/*",
     "readiness/*",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "scripts/test.sh",
+    "scripts/check-public-language.sh",
+    "scripts/consume-php-policy",
+    "scripts/generate-policy-lua",
+    "test/*"
   ]
 }

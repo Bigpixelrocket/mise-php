@@ -1,4 +1,9 @@
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec python3 "$ROOT/autorelease/admission.py" verify-merge "$@"
+#!/usr/bin/env python3
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from autorelease.admission import main
+
+sys.argv.insert(1, "verify-merge")
+raise SystemExit(main())

@@ -12,6 +12,10 @@ concurrency:
   group: mise-php-autorelease-consumer
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   investigate:
     runs-on: ubuntu-latest
@@ -40,6 +44,33 @@ jobs:
           test "$state" = "paused" || test "$state" = "enabled"
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "commit=$(git -C php-operator-control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Gate the run on shared-file parity with php-bin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHP_BIN_COMMIT: ${{ steps.operator.outputs.commit }}
+        run: |
+          mapfile -t shared < <(jq -r '.paths[]' autorelease/shared-files.json)
+          # mapfile reports success even when the substitution failed, so an
+          # absent, unparseable, or empty manifest would disable the gate.
+          if [[ "${#shared[@]}" -eq 0 ]]; then
+            echo "Shared-file manifest is missing, unparseable, or empty: autorelease/shared-files.json" >&2
+            exit 1
+          fi
+          for path in "${shared[@]}"; do
+            gh api "repos/Bigpixelrocket/php-bin/contents/$path?ref=$PHP_BIN_COMMIT" \
+              > "$RUNNER_TEMP/shared-file.json"
+            # An oversized or symlinked entry comes back unencoded, which would
+            # otherwise decode to nothing and be reported as drift.
+            if [[ "$(jq -r .encoding "$RUNNER_TEMP/shared-file.json")" != "base64" ]]; then
+              echo "Shared file was not returned base64-encoded by php-bin at $PHP_BIN_COMMIT: $path" >&2
+              exit 1
+            fi
+            jq -r .content "$RUNNER_TEMP/shared-file.json" | base64 --decode > "$RUNNER_TEMP/shared-file"
+            if ! cmp -s "$RUNNER_TEMP/shared-file" "$path"; then
+              echo "Shared file drifted from php-bin at $PHP_BIN_COMMIT: $path" >&2
+              exit 1
+            fi
+          done
       - name: Capture accepted public php-bin policy
         run: |
           mkdir -p autorelease-run
@@ -48,7 +79,7 @@ jobs:
             --invariants-output autorelease-run/policy-invariants.json \
             --commit-output autorelease-run/php-bin-main.json \
             --manifest autorelease-run/policy-capture.json
-      - name: Compare only opaque policy and event digests
+      - name: Compare only opaque policy digests
         id: compare
         run: |
           ./scripts/consume-php-policy compare \
@@ -56,7 +87,6 @@ jobs:
             --invariants autorelease-run/policy-invariants.json \
             --policy-commit autorelease-run/php-bin-main.json \
             --snapshot support-snapshot.json \
-            --events autorelease-events \
             --output autorelease-run/decision.json
           echo "trigger=$(jq -r .trigger autorelease-run/decision.json)" >> "$GITHUB_OUTPUT"
       - name: Prepare exact investigation contract
@@ -70,6 +100,7 @@ jobs:
             --arg policyInvariantsDigest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
             --arg phpBinOperatorCommit "${{ steps.operator.outputs.commit }}" \
             --arg operatorState "${{ steps.operator.outputs.state }}" \
+            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase investigation)" \
             '{
               contractVersion:1,
               phase:"investigation",
@@ -78,12 +109,7 @@ jobs:
               preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState},
               allowedAuthority:["read_repository","read_captured_policy"],
               nonGoals:["upstream_php_classification","repository_mutation","required_check_execution","irreversible_github_effect"],
-              completionCriteria:[
-                {id:"phase-goal-correct",requirement:"The goal matches exact inputs.",evidenceRequired:"Exact preconditions."},
-                {id:"policy-difference-explained",requirement:"Every required local change is bound to captured policy.",evidenceRequired:"Policy digest and JSON locator."},
-                {id:"authority-explicit",requirement:"Paths and checks are explicit.",evidenceRequired:"Allowed paths and required checks."},
-                {id:"no-unresolved-work",requirement:"No contradiction or stop condition remains.",evidenceRequired:"Empty unresolved list."}
-              ],
+              completionCriteria:$completionCriteria,
               stopConditions:["missing_or_contradictory_policy","changed_precondition","required_protected_change"]
             }' > autorelease-run/event-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
@@ -166,17 +192,12 @@ jobs:
           path: autorelease-run
       - name: Prepare implementation contract and prompt
         run: |
-          jq \
+          jq --argjson completionCriteria "$(./scripts/prepare-agent-task --phase implementation)" \
             '.phase="implementation"
              | .goal="Implement the admitted mise-php policy synchronization at the exact base."
              | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
              | .nonGoals=["protected_control_change","irreversible_github_effect"]
-             | .completionCriteria=[
-                {id:"phase-goal-correct",requirement:"Goal and preconditions remain exact.",evidenceRequired:"Plan digest and base SHA."},
-                {id:"admitted-diff-complete",requirement:"Diff is complete and admitted.",evidenceRequired:"Final diff and path comparison."},
-                {id:"advisory-checks-recorded",requirement:"All checks ran.",evidenceRequired:"Commands and results."},
-                {id:"no-unresolved-work",requirement:"No in-scope work remains.",evidenceRequired:"Empty unresolved list."}
-             ]' \
+             | .completionCriteria=$completionCriteria' \
             autorelease-run/event-contract.json > autorelease-run/implementation-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
           phase="sha256:$(shasum -a 256 .github/codex/autorelease/implementation.md | awk '{print $1}')"
@@ -256,7 +277,7 @@ jobs:
           test "$actual" = "$expected"
           git apply --index autorelease-run/sealed/sealed.patch
       - name: Run authoritative plugin checks without OpenAI credential
-        id: checks
+        id: run-checks
         run: |
           test -z "${OPENAI_API_KEY:-}"
           set +e
@@ -264,12 +285,12 @@ jobs:
           status="${PIPESTATUS[0]}"
           set -e
           if [[ "$status" == "0" ]]; then
-            echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo "status=passed" >> "$GITHUB_OUTPUT"
           else
-            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
           fi
       - name: Create reproducible validated commit bundle
-        if: steps.checks.outputs.passed == 'true'
+        if: steps.run-checks.outputs.status == 'passed'
         env:
           BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
         run: |
@@ -284,7 +305,7 @@ jobs:
             '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
           git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.checks.outputs.passed == 'true'
+        if: steps.run-checks.outputs.status == 'passed'
         with:
           name: mise-validated-autorelease-patch-${{ github.run_id }}
           path: autorelease-run/
@@ -292,13 +313,21 @@ jobs:
           retention-days: 90
           include-hidden-files: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: steps.checks.outputs.passed != 'true'
+        if: steps.run-checks.outputs.status != 'passed'
         with:
           name: mise-failed-autorelease-validation-${{ github.run_id }}
           path: autorelease-run/
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+      # Last step on purpose, exactly as in validate-repair: the merge job keys on
+      # this output and downloads the validated artifact, so a failed upload must
+      # leave `passed` unset rather than claim a validated patch is waiting. An
+      # unset output reads as not-passed to both the merge job and repair.
+      - name: Record that the patch validated
+        id: checks
+        if: steps.run-checks.outputs.status == 'passed'
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   repair:
     needs: [investigate, validate]
@@ -323,17 +352,14 @@ jobs:
           git apply --index autorelease-run/sealed/sealed.patch
           fingerprint="sha256:$(shasum -a 256 autorelease-run/authoritative-checks.log | awk '{print $1}')"
           jq --arg goal "Repair the retained authoritative failure $fingerprint without expanding the admitted diff." \
+            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase repair)" \
             '.phase="repair"
              | .goal=$goal
              | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
              | .nonGoals=["protected_control_change","irreversible_github_effect"]
              | .stopConditions=["changed_precondition","repeated_or_unrelated_failure","required_protected_change"]
-             | .completionCriteria=[
-                {id:"phase-goal-correct",requirement:"The repair goal matches the exact failure and inputs.",evidenceRequired:"Failure fingerprint and exact base."},
-                {id:"failure-cause-removed",requirement:"The named failure is removed without weakening a gate.",evidenceRequired:"Minimal admitted diff and reproduction evidence."},
-                {id:"advisory-checks-recorded",requirement:"All advisory checks ran.",evidenceRequired:"Commands and results."},
-                {id:"no-unresolved-work",requirement:"No repeated or unrelated failure remains.",evidenceRequired:"Empty unresolved list."}
-             ]' autorelease-run/implementation-contract.json > autorelease-run/repair-contract.json
+             | .completionCriteria=$completionCriteria' \
+            autorelease-run/implementation-contract.json > autorelease-run/repair-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
           phase="sha256:$(shasum -a 256 .github/codex/autorelease/repair.md | awk '{print $1}')"
           event="sha256:$(shasum -a 256 autorelease-run/repair-contract.json | awk '{print $1}')"
@@ -389,6 +415,8 @@ jobs:
 
   validate-repair:
     needs: [investigate, repair]
+    outputs:
+      passed: ${{ steps.checks.outputs.passed }}
     runs-on: macos-26
     timeout-minutes: 25
     permissions:
@@ -412,8 +440,12 @@ jobs:
           git apply --index autorelease-run/sealed-repair/sealed.patch
           test -z "${OPENAI_API_KEY:-}"
           ./scripts/test.sh
-          cp autorelease-run/sealed-repair/sealed.patch autorelease-run/sealed/sealed.patch
-          cp autorelease-run/sealed-repair/patch-manifest.json autorelease-run/sealed/patch-manifest.json
+          # The merge job reads autorelease-run/sealed, so the repaired seal has to
+          # arrive under that name. The rejected seal is renamed rather than
+          # overwritten: it is the evidence of what the repair replaced, and it ships
+          # in the same artifact.
+          mv autorelease-run/sealed autorelease-run/sealed-failed
+          cp -R autorelease-run/sealed-repair autorelease-run/sealed
       - name: Create repaired validated commit bundle
         env:
           BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
@@ -435,10 +467,15 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+      # Last step on purpose: the merge job keys on this output, so it must not be
+      # set until the validated artifact it downloads has actually been uploaded.
+      - name: Record that the repaired patch validated
+        id: checks
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   merge-and-record-readiness:
     needs: [investigate, validate, validate-repair]
-    if: always() && (needs.validate.outputs.passed == 'true' || needs['validate-repair'].result == 'success')
+    if: ${{ !cancelled() && (needs.validate.outputs.passed == 'true' || needs['validate-repair'].outputs.passed == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -471,7 +508,7 @@ jobs:
           # action key, but this value reaches $GITHUB_OUTPUT and later shell
           # steps, so its alphabet is re-asserted at the boundary.
           [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
-          branch="autorelease/$(printf '%s' "$action_key" | tr ':/' '--')"
+          branch="autorelease/$(./scripts/consume-php-policy action-filename "$action_key" --suffix '')"
           gh auth setup-git
           git push origin "HEAD:refs/heads/$branch"
           number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
@@ -491,7 +528,7 @@ jobs:
             --pr "$PR_NUMBER" \
             --check "Plugin contract" \
             --output autorelease-run/pr-checks.json
-          jq -e '[.[] | select(.name=="Plugin contract") | .bucket] == ["pass"]' autorelease-run/pr-checks.json
+          ./scripts/assert-admission-checks --check-name "Plugin contract" --checks autorelease-run/pr-checks.json
           expected="$(jq -r .headSha autorelease-run/validation.json)"
           actual="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
           test "$actual" = "$expected"
@@ -556,7 +593,7 @@ jobs:
           git checkout -B autorelease/readiness-${{ github.run_id }} origin/main
           base="$(git rev-parse HEAD)"
           mkdir -p readiness
-          filename="$(printf '%s' "$ACTION_KEY" | tr ':/' '--').json"
+          filename="$(./scripts/consume-php-policy action-filename "$ACTION_KEY")"
           mapfile -t digests < <(jq -r '.captures[].digest' autorelease-run/policy-capture.json)
           args=()
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done
@@ -589,7 +626,7 @@ jobs:
             --pr "${{ steps.readiness.outputs.number }}" \
             --check "Plugin contract" \
             --output autorelease-run/readiness-checks.json
-          jq -e '[.[] | select(.name=="Plugin contract") | .bucket] == ["pass"]' autorelease-run/readiness-checks.json
+          ./scripts/assert-admission-checks --check-name "Plugin contract" --checks autorelease-run/readiness-checks.json
           actual="$(gh pr view "${{ steps.readiness.outputs.number }}" --json headRefOid --jq .headRefOid)"
           test "$actual" = "${{ steps.readiness.outputs.head_sha }}"
           git fetch origin main
