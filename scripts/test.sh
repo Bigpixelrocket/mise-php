@@ -23,7 +23,11 @@ fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mise-php-test.XXXXXX")"
 SERVER_PID=""
+ORIGINAL_POLICY=""
 cleanup() {
+  if [[ -n "$ORIGINAL_POLICY" ]]; then
+    printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"
+  fi
   if [[ -n "$SERVER_PID" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -85,11 +89,11 @@ if grep -Fx "9.0.1" <<< "$AVAILABLE_VERSIONS"; then
   echo "Unmaintained future branch was unexpectedly listed." >&2
   exit 1
 fi
+# cleanup restores lib/policy.lua, so a failure mid-swap cannot leave it mutated.
 ORIGINAL_POLICY="$(cat "$PROJECT_ROOT/lib/policy.lua")"
-restore_policy() { printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"; }
 printf 'return {\n    maintained = { "8.2", "8.3", "8.4", "8.5", "9.0" },\n}\n' > "$PROJECT_ROOT/lib/policy.lua"
 FUTURE_VERSIONS="$(mise ls-remote php)"
-restore_policy
+printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"
 grep -Fx "9.0.1" <<< "$FUTURE_VERSIONS"
 
 mise install php@8.4
