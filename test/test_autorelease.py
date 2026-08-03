@@ -111,6 +111,17 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
 
+    def test_secret_scanner_catches_sk_tokens(self):
+        for secret in (
+            "key = sk-" + "a" * 24,
+            "github_pat_" + "a" * 22,
+            "ghp_" + "a" * 36,
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+        ):
+            self.assertIsNotNone(admission.SECRET_RE.search(secret), secret)
+        for benign in ("task-" + "a" * 24, "github_pat_x", "flask-login"):
+            self.assertIsNone(admission.SECRET_RE.search(benign), benign)
+
     def test_investigation_defers_required_checks_to_writable_jobs(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         instructions = (root / ".github/codex/autorelease/investigation.md").read_text()

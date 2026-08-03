@@ -27,6 +27,12 @@ ACTION_KEY_RE = re.compile(
     r"repair:\d+\.\d+\.\d+:[0-9a-f]{8,64}|"
     r"(?:source_unhealthy|health_failed|policy_failure|auth_failure):[0-9a-f]{8,64})$"
 )
+SECRET_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|\bgh[opusr]_[A-Za-z0-9]{30,}\b"
+    r"|\bsk-[A-Za-z0-9_-]{20,}\b"
+)
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 READINESS_RECORD_KEYS = {
     "schemaVersion", "actionKey", "state", "ready", "phpBinPolicyCommit",
@@ -368,7 +374,7 @@ def seal(
             text = body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AdmissionError(f"diff entry is not valid UTF-8: {path}") from error
-        if re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_|\\bsk-[A-Za-z0-9_-]{20,}", text):
+        if SECRET_RE.search(text):
             raise AdmissionError(f"secret-like material in diff: {path}")
         if path == "support-snapshot.json":
             try:
