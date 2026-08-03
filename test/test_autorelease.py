@@ -165,92 +165,109 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             with self.assertRaises(AdmissionError):
                 verify_merge(root, mutated, manifest, {"Plugin contract": "success"}, state, state)
 
+    # Returns an admissible plan plus the remaining admit() arguments by keyword, so
+    # a test can vary one part of the plan without rebuilding the policy capture.
+    def admission_fixture(self, root):
+        shared = root / "shared.md"
+        phase = root / "phase.md"
+        event = root / "event.json"
+        shared.write_text("shared\n")
+        phase.write_text("phase\n")
+        commit_sha = "a" * 40
+        policy_digest = "sha256:" + "b" * 64
+        invariants_digest = "sha256:" + "c" * 64
+        preconditions = {
+            "misePhpHead": "d" * 40,
+            "phpBinPolicyCommit": commit_sha,
+            "supportPolicyDigest": policy_digest,
+            "policyInvariantsDigest": invariants_digest,
+            "phpBinOperatorCommit": "e" * 40,
+            "operatorState": "enabled",
+        }
+        contract = {
+            "contractVersion": 1,
+            "actionKey": "new_branch:8.6",
+            "preconditions": preconditions,
+            "completionCriteria": [{"id": "done"}],
+        }
+        event.write_text(json.dumps(contract) + "\n")
+        captures = [
+            ("php_bin_policy_selector", [{"sha": commit_sha}], "/0/sha"),
+            ("php_bin_state", {"sha": commit_sha}, "/sha"),
+            ("support_policy", {"maintainedBranches": ["8.6"]}, "/maintainedBranches"),
+            ("policy_invariants", {"target": {"os": "macOS"}}, "/target"),
+        ]
+        manifest_records = []
+        evidence = []
+        for capture_id, body, pointer in captures:
+            path = root / f"{capture_id}.json"
+            path.write_text(json.dumps(body) + "\n")
+            body_digest = digest(path.read_bytes())
+            if capture_id == "support_policy":
+                policy_digest = body_digest
+                preconditions["supportPolicyDigest"] = body_digest
+            elif capture_id == "policy_invariants":
+                invariants_digest = body_digest
+                preconditions["policyInvariantsDigest"] = body_digest
+            manifest_records.append({"captureId": capture_id, "bodyPath": path.name, "digest": body_digest})
+            evidence.append({"captureId": capture_id, "digest": body_digest, "locator": {"kind": "json_pointer", "value": pointer}})
+        event.write_text(json.dumps(contract) + "\n")
+        manifest = root / "capture.json"
+        manifest.write_text(json.dumps({"schemaVersion": 1, "captures": manifest_records}) + "\n")
+        digests = {
+            "shared": digest_file(shared),
+            "phaseTemplate": digest_file(phase),
+            "eventContract": digest_file(event),
+        }
+        plan = {
+            "schemaVersion": 1,
+            "actionKey": "new_branch:8.6",
+            "action": "new_branch",
+            "agentContract": {"instructionDigests": digests},
+            "completionAssessment": {
+                "instructionDigests": digests,
+                "phaseStatus": "complete",
+                "criteria": [{"id": "done", "status": "passed", "evidence": ["evidence[0]"]}],
+                "unresolved": [],
+                "goNoGo": "go",
+            },
+            "preconditions": preconditions,
+            "evidence": evidence,
+            "repositories": ["mise-php"],
+            "editsRequired": True,
+            "allowedPaths": {"mise-php": ["support-snapshot.json", "lib/policy.lua"]},
+            "requiredChecks": ["Plugin contract"],
+            "risk": "lifecycle",
+            "agentOperations": [],
+            "budgets": {"maxModelCalls": 1, "maxRetries": 1, "timeoutMinutes": 30},
+        }
+        return plan, {
+            "contract": contract,
+            "shared": shared,
+            "phase": phase,
+            "event": event,
+            "capture_manifest": manifest,
+            "policy_digest": policy_digest,
+            "invariants_digest": invariants_digest,
+            "mise_head": preconditions["misePhpHead"],
+        }
+
     def test_admission_binds_complete_policy_capture_and_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            shared = root / "shared.md"
-            phase = root / "phase.md"
-            event = root / "event.json"
-            shared.write_text("shared\n")
-            phase.write_text("phase\n")
-            commit_sha = "a" * 40
-            policy_digest = "sha256:" + "b" * 64
-            invariants_digest = "sha256:" + "c" * 64
-            preconditions = {
-                "misePhpHead": "d" * 40,
-                "phpBinPolicyCommit": commit_sha,
-                "supportPolicyDigest": policy_digest,
-                "policyInvariantsDigest": invariants_digest,
-                "phpBinOperatorCommit": "e" * 40,
-                "operatorState": "enabled",
-            }
-            contract = {
-                "contractVersion": 1,
-                "actionKey": "new_branch:8.6",
-                "preconditions": preconditions,
-                "completionCriteria": [{"id": "done"}],
-            }
-            event.write_text(json.dumps(contract) + "\n")
-            captures = [
-                ("php_bin_policy_selector", [{"sha": commit_sha}], "/0/sha"),
-                ("php_bin_state", {"sha": commit_sha}, "/sha"),
-                ("support_policy", {"maintainedBranches": ["8.6"]}, "/maintainedBranches"),
-                ("policy_invariants", {"target": {"os": "macOS"}}, "/target"),
-            ]
-            manifest_records = []
-            evidence = []
-            for capture_id, body, pointer in captures:
-                path = root / f"{capture_id}.json"
-                path.write_text(json.dumps(body) + "\n")
-                body_digest = digest(path.read_bytes())
-                if capture_id == "support_policy":
-                    policy_digest = body_digest
-                    preconditions["supportPolicyDigest"] = body_digest
-                elif capture_id == "policy_invariants":
-                    invariants_digest = body_digest
-                    preconditions["policyInvariantsDigest"] = body_digest
-                manifest_records.append({"captureId": capture_id, "bodyPath": path.name, "digest": body_digest})
-                evidence.append({"captureId": capture_id, "digest": body_digest, "locator": {"kind": "json_pointer", "value": pointer}})
-            event.write_text(json.dumps(contract) + "\n")
-            manifest = root / "capture.json"
-            manifest.write_text(json.dumps({"schemaVersion": 1, "captures": manifest_records}) + "\n")
-            digests = {
-                "shared": digest_file(shared),
-                "phaseTemplate": digest_file(phase),
-                "eventContract": digest_file(event),
-            }
-            plan = {
-                "schemaVersion": 1,
-                "actionKey": "new_branch:8.6",
-                "action": "new_branch",
-                "agentContract": {"instructionDigests": digests},
-                "completionAssessment": {
-                    "instructionDigests": digests,
-                    "phaseStatus": "complete",
-                    "criteria": [{"id": "done", "status": "passed", "evidence": ["evidence[0]"]}],
-                    "unresolved": [],
-                    "goNoGo": "go",
-                },
-                "preconditions": preconditions,
-                "evidence": evidence,
-                "repositories": ["mise-php"],
-                "editsRequired": True,
-                "allowedPaths": {"mise-php": ["support-snapshot.json"]},
-                "requiredChecks": ["Plugin contract"],
-                "risk": "lifecycle",
-                "agentOperations": [],
-                "budgets": {"maxModelCalls": 1, "maxRetries": 1, "timeoutMinutes": 30},
-            }
-            result = admit(
-                plan, contract, shared, phase, event, manifest,
-                policy_digest, invariants_digest, preconditions["misePhpHead"],
-            )
-            self.assertTrue(result["admitted"])
+            plan, arguments = self.admission_fixture(pathlib.Path(temporary))
+            self.assertTrue(admit(plan, **arguments)["admitted"])
             with self.assertRaises(AdmissionError):
-                admit(
-                    plan, contract, shared, phase, event, manifest,
-                    "sha256:" + "f" * 64, invariants_digest, preconditions["misePhpHead"],
-                )
+                admit(plan, **{**arguments, "policy_digest": "sha256:" + "f" * 64})
+
+    def test_admission_requires_the_generated_policy_lua_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, arguments = self.admission_fixture(pathlib.Path(temporary))
+            plan["allowedPaths"] = {"mise-php": ["support-snapshot.json"]}
+            with self.assertRaises(AdmissionError) as ctx:
+                admit(plan, **arguments)
+            self.assertIn("lib/policy.lua", str(ctx.exception))
+            plan["allowedPaths"] = {"mise-php": ["support-snapshot.json", "lib/policy.lua"]}
+            self.assertTrue(admit(plan, **arguments)["admitted"])
 
     def test_snapshot_diff_requires_matching_policy_lua(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -254,6 +254,10 @@ def admit(
             flattened.append(pattern)
     if not any(fnmatch.fnmatch("support-snapshot.json", pattern) for pattern in flattened):
         raise AdmissionError("policy synchronization does not admit the generated support snapshot")
+    # Sealing rejects a snapshot edit whose lib/policy.lua was not regenerated, so a
+    # plan that cannot carry the regenerated file is unsatisfiable rather than risky.
+    if not any(fnmatch.fnmatch("lib/policy.lua", pattern) for pattern in flattened):
+        raise AdmissionError("policy synchronization does not admit the generated lib/policy.lua")
     operations = plan.get("agentOperations")
     if not isinstance(operations, list) or not all(isinstance(item, str) for item in operations):
         raise AdmissionError("agent operations must be an array of strings")
@@ -376,7 +380,7 @@ def seal(
                 "}",
             ]
             policy_lua = repo / "lib" / "policy.lua"
-            if policy_lua.read_text().splitlines() != expected_policy_lines:
+            if not policy_lua.is_file() or policy_lua.read_text().splitlines() != expected_policy_lines:
                 raise AdmissionError("support snapshot changed without regenerating lib/policy.lua")
         files.append({"path": path, "digest": digest_bytes(body), "mode": oct(mode)})
     output.mkdir(parents=True, exist_ok=True)
