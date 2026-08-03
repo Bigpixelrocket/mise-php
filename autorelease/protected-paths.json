@@ -8,6 +8,7 @@
     "schemas/*",
     "autorelease/*",
     "scripts/admit-autorelease-plan",
+    "scripts/assert-admission-checks",
     "scripts/dispatch-pr-checks",
     "scripts/seal-autorelease-patch",
     "scripts/validate-codex-action-inputs",

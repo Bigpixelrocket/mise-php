@@ -6,6 +6,7 @@
 /autorelease/ @loadinglucian
 /schemas/ @loadinglucian
 /scripts/admit-autorelease-plan @loadinglucian
+/scripts/assert-admission-checks @loadinglucian
 /scripts/dispatch-pr-checks @loadinglucian
 /scripts/seal-autorelease-patch @loadinglucian
 /scripts/validate-codex-action-inputs @loadinglucian

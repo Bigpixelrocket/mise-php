@@ -491,7 +491,7 @@ jobs:
             --pr "$PR_NUMBER" \
             --check "Plugin contract" \
             --output autorelease-run/pr-checks.json
-          jq -e '[.[] | select(.name=="Plugin contract") | .bucket] == ["pass"]' autorelease-run/pr-checks.json
+          ./scripts/assert-admission-checks --check-name "Plugin contract" --checks autorelease-run/pr-checks.json
           expected="$(jq -r .headSha autorelease-run/validation.json)"
           actual="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
           test "$actual" = "$expected"
@@ -589,7 +589,7 @@ jobs:
             --pr "${{ steps.readiness.outputs.number }}" \
             --check "Plugin contract" \
             --output autorelease-run/readiness-checks.json
-          jq -e '[.[] | select(.name=="Plugin contract") | .bucket] == ["pass"]' autorelease-run/readiness-checks.json
+          ./scripts/assert-admission-checks --check-name "Plugin contract" --checks autorelease-run/readiness-checks.json
           actual="$(gh pr view "${{ steps.readiness.outputs.number }}" --json headRefOid --jq .headRefOid)"
           test "$actual" = "${{ steps.readiness.outputs.head_sha }}"
           git fetch origin main
