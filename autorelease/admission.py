@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""Deterministic admission and sealing for repository-scoped mise changes."""
+"""Deterministic admission and sealing for repository-scoped mise changes.
+
+This module imports from `autorelease.consumer`, so it is reached only as a package:
+`scripts/admit-autorelease-plan`, `scripts/seal-autorelease-patch` and
+`scripts/verify-merge-admission` are its command-line entry points.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,10 @@ import subprocess
 import sys
 from typing import Any
 
+# The admissible action-key alphabet is defined once, beside the filename mapping that
+# both repositories derive record and branch names from.
+from autorelease.consumer import ACTION_KEY_RE
+
 
 PROTECTED_PATHS = pathlib.Path(__file__).with_name("protected-paths.json")
 try:
@@ -20,13 +28,6 @@ try:
 except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
     raise RuntimeError(f"cannot load protected paths: {error}") from error
 PROHIBITED = {"merge", "push", "tag", "release", "publish", "workflow_permissions", "secret_access"}
-ACTION_KEY_RE = re.compile(
-    r"^(new_patch:\d+\.\d+\.\d+|new_branch:\d+\.\d+|"
-    r"branch_eol:\d+\.\d+:\d{4}-\d{2}-\d{2}|"
-    r"recipe_rebuild:\d+\.\d+\.\d+:[1-9]\d*|"
-    r"repair:\d+\.\d+\.\d+:[0-9a-f]{8,64}|"
-    r"(?:source_unhealthy|health_failed|policy_failure|auth_failure):[0-9a-f]{8,64})$"
-)
 SECRET_RE = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
     r"|github_pat_[A-Za-z0-9_]{20,}"
@@ -555,7 +556,3 @@ def main() -> int:
     except (AdmissionError, OSError, subprocess.CalledProcessError) as error:
         print(f"mise autorelease admission rejected: {error}", file=sys.stderr)
         return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

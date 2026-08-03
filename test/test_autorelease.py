@@ -102,6 +102,31 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             with self.assertRaises(admission.AdmissionError):
                 admission.validate_readiness_record(corrupt)
 
+    def test_action_key_alphabet_and_filename_have_one_definition(self):
+        # admission and consumer both name files and branches from an action key; a
+        # second copy of either rule drifts silently against php-bin.
+        # re.compile caches by pattern, so identical copies are indistinguishable at
+        # runtime; the single definition is only observable in the source.
+        source = pathlib.Path("autorelease/admission.py").read_text()
+        self.assertIn("from autorelease.consumer import ACTION_KEY_RE", source)
+        self.assertNotIn("ACTION_KEY_RE = re.compile", source)
+        self.assertEqual(admission.ACTION_KEY_RE.pattern, consumer.ACTION_KEY_RE.pattern)
+        self.assertEqual(
+            "branch_eol-8.2-2026-12-31.json", consumer.action_filename("branch_eol:8.2:2026-12-31")
+        )
+        self.assertEqual("new_patch-8.5.9", consumer.action_filename("new_patch:8.5.9", ""))
+        with self.assertRaises(ConsumerError):
+            consumer.action_filename("../escape")
+        # The workflow reaches the helper through the same entry point as every other
+        # consumer subcommand, so the shell sites cannot re-derive the mapping.
+        result = subprocess.run(
+            ["./scripts/consume-php-policy", "action-filename", "new_patch:8.5.9"],
+            check=True, text=True, stdout=subprocess.PIPE,
+        )
+        self.assertEqual("new_patch-8.5.9.json", result.stdout.strip())
+        workflow = pathlib.Path(".github/workflows/autorelease-consumer.yml").read_text()
+        self.assertNotIn("tr ':/'", workflow)
+
     def test_protected_controls_are_not_admissible(self):
         self.assertTrue(protected(".github/codex-action-contract.json"))
         self.assertTrue(protected(".github/workflows/autorelease-consumer.yml"))

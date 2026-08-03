@@ -483,7 +483,7 @@ jobs:
           # action key, but this value reaches $GITHUB_OUTPUT and later shell
           # steps, so its alphabet is re-asserted at the boundary.
           [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
-          branch="autorelease/$(printf '%s' "$action_key" | tr ':/' '--')"
+          branch="autorelease/$(./scripts/consume-php-policy action-filename "$action_key" --suffix '')"
           gh auth setup-git
           git push origin "HEAD:refs/heads/$branch"
           number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
@@ -568,7 +568,7 @@ jobs:
           git checkout -B autorelease/readiness-${{ github.run_id }} origin/main
           base="$(git rev-parse HEAD)"
           mkdir -p readiness
-          filename="$(printf '%s' "$ACTION_KEY" | tr ':/' '--').json"
+          filename="$(./scripts/consume-php-policy action-filename "$ACTION_KEY")"
           mapfile -t digests < <(jq -r '.captures[].digest' autorelease-run/policy-capture.json)
           args=()
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done

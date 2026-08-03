@@ -51,6 +51,22 @@ class RestrictedRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+ACTION_FILENAME_MAP = str.maketrans({":": "-", "/": "-"})
+
+
+def action_filename(action_key: str, suffix: str = ".json") -> str:
+    """Return the single file or branch name an action key may occupy.
+
+    php-bin names event records from an action key with exactly this mapping, and the
+    readiness record it reads back is matched by name, so the two repositories share one
+    definition of it. The key is model-authored and reaches shell arguments and
+    repository paths, so its alphabet is re-asserted at this boundary.
+    """
+    if not ACTION_KEY_RE.fullmatch(action_key):
+        raise ConsumerError(f"invalid action key: {action_key}")
+    return action_key.translate(ACTION_FILENAME_MAP) + suffix
+
+
 def now() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -358,6 +374,9 @@ def main() -> int:
     ready.add_argument("--mise-commit", required=True)
     ready.add_argument("--evidence-digest", action="append", required=True)
     ready.add_argument("--output", required=True, type=pathlib.Path)
+    filename = sub.add_parser("action-filename")
+    filename.add_argument("action_key")
+    filename.add_argument("--suffix", default=".json")
     args = parser.parse_args()
     try:
         if args.command == "fetch":
@@ -368,6 +387,8 @@ def main() -> int:
                     "captures": fetch_policy_set(args.output, args.invariants_output, args.commit_output),
                 },
             )
+        elif args.command == "action-filename":
+            print(action_filename(args.action_key, args.suffix))
         elif args.command == "compare":
             result = compare(args.policy, args.invariants, args.policy_commit, args.snapshot, args.events)
             write(args.output, result)
