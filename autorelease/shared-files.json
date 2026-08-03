@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "paths": [
+    ".codex/implementation.config.toml",
+    ".codex/repair.config.toml",
+    ".github/dependabot.yml",
+    "scripts/assert-admission-checks",
+    "scripts/check-public-language.sh",
+    "scripts/dispatch-pr-checks",
+    "scripts/validate-codex-action-inputs"
+  ]
+}

@@ -126,6 +126,24 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             if "*" not in pattern:
                 self.assertIn(f"/{pattern} ", codeowners, pattern)
 
+    def test_shared_file_manifest_gates_the_consumer_run(self):
+        # ~20 files are duplicated from php-bin and most had drifted silently. The
+        # manifest declares the intended-identical set; the consumer compares it
+        # against php-bin at the exact pinned commit before it mutates anything.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        manifest = json.loads((root / "autorelease/shared-files.json").read_text())
+        self.assertEqual(1, manifest["schemaVersion"])
+        paths = manifest["paths"]
+        self.assertEqual(sorted(set(paths)), paths)
+        for path in paths:
+            self.assertTrue((root / path).is_file(), path)
+            # A shared file an agent may rewrite would fail the gate on the next
+            # run, so every listed path needs owner review of its own.
+            self.assertTrue(protected(path), path)
+        self.assertTrue(protected("autorelease/shared-files.json"))
+        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        self.assertIn("jq -r '.paths[]' autorelease/shared-files.json", consumer)
+
     def test_secret_scanner_catches_sk_tokens(self):
         for secret in (
             "key = sk-" + "a" * 24,

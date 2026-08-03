@@ -8,10 +8,12 @@ The scheduled `php-bin policy consumer` captures the accepted public
 `support-policy.json` and compares it with `support-snapshot.json`: the policy
 digest, the invariants digest, the php-bin policy commit, the maintained
 branches, and any locally incomplete event. It does not fetch or classify
-upstream PHP lifecycle data. When the exact policy changes, the
-repository-scoped pinned Codex Action produces an evidence-bound plan. Any
-implementation runs offline, without a GitHub write credential, and only
-against admitted paths.
+upstream PHP lifecycle data. The run stops before that capture unless every
+path in `autorelease/shared-files.json` is byte-identical with `php-bin` at the
+exact commit the operator control was read from. When the exact policy
+changes, the repository-scoped pinned Codex Action produces an evidence-bound
+plan. Any implementation runs offline, without a GitHub write credential, and
+only against admitted paths.
 
 ```mermaid
 flowchart TD

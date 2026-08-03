@@ -40,6 +40,24 @@ jobs:
           test "$state" = "paused" || test "$state" = "enabled"
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "commit=$(git -C php-operator-control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Gate the run on shared-file parity with php-bin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHP_BIN_COMMIT: ${{ steps.operator.outputs.commit }}
+        run: |
+          mapfile -t shared < <(jq -r '.paths[]' autorelease/shared-files.json)
+          for path in "${shared[@]}"; do
+            gh api "repos/Bigpixelrocket/php-bin/contents/$path?ref=$PHP_BIN_COMMIT" \
+              > "$RUNNER_TEMP/shared-file.json"
+            # An oversized or symlinked entry comes back unencoded, which would
+            # otherwise decode to nothing and be reported as drift.
+            test "$(jq -r .encoding "$RUNNER_TEMP/shared-file.json")" = "base64"
+            jq -r .content "$RUNNER_TEMP/shared-file.json" | base64 --decode > "$RUNNER_TEMP/shared-file"
+            if ! cmp -s "$RUNNER_TEMP/shared-file" "$path"; then
+              echo "Shared file drifted from php-bin at $PHP_BIN_COMMIT: $path" >&2
+              exit 1
+            fi
+          done
       - name: Capture accepted public php-bin policy
         run: |
           mkdir -p autorelease-run
