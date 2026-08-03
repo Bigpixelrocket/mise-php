@@ -432,8 +432,12 @@ jobs:
           git apply --index autorelease-run/sealed-repair/sealed.patch
           test -z "${OPENAI_API_KEY:-}"
           ./scripts/test.sh
-          cp autorelease-run/sealed-repair/sealed.patch autorelease-run/sealed/sealed.patch
-          cp autorelease-run/sealed-repair/patch-manifest.json autorelease-run/sealed/patch-manifest.json
+          # The merge job reads autorelease-run/sealed, so the repaired seal has to
+          # arrive under that name. The rejected seal is renamed rather than
+          # overwritten: it is the evidence of what the repair replaced, and it ships
+          # in the same artifact.
+          mv autorelease-run/sealed autorelease-run/sealed-failed
+          cp -R autorelease-run/sealed-repair autorelease-run/sealed
       - name: Create repaired validated commit bundle
         env:
           BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
