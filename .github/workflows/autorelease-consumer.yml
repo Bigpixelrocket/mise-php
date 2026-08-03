@@ -407,6 +407,8 @@ jobs:
 
   validate-repair:
     needs: [investigate, repair]
+    outputs:
+      passed: ${{ steps.checks.outputs.passed }}
     runs-on: macos-26
     timeout-minutes: 25
     permissions:
@@ -453,10 +455,15 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+      # Last step on purpose: the merge job keys on this output, so it must not be
+      # set until the validated artifact it downloads has actually been uploaded.
+      - name: Record that the repaired patch validated
+        id: checks
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   merge-and-record-readiness:
     needs: [investigate, validate, validate-repair]
-    if: always() && (needs.validate.outputs.passed == 'true' || needs['validate-repair'].result == 'success')
+    if: ${{ !cancelled() && (needs.validate.outputs.passed == 'true' || needs['validate-repair'].outputs.passed == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
