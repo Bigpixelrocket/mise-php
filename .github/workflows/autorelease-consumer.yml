@@ -12,6 +12,10 @@ concurrency:
   group: mise-php-autorelease-consumer
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   investigate:
     runs-on: ubuntu-latest
