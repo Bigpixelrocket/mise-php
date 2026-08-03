@@ -83,7 +83,7 @@ by design, while every protected control still cannot merge that way.
 End of life is the same path in reverse and equally unattended. The branch
 leaves the maintained set, so it stops appearing in `mise ls-remote` and stops
 resolving from a shorthand such as `php@8.2`. Nothing is removed: an exact
-published version such as `8.2.29` still installs, because its `php-bin`
+published version such as `8.2.32` still installs, because its `php-bin`
 release and checksum assets are immutable.
 
 Pause unattended mutation in the reviewed
