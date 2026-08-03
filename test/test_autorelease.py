@@ -150,6 +150,20 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             consumer,
         )
 
+    def test_assert_admission_checks_covers_the_plugin_contract_bucket(self):
+        # The consumer merge gates only ever pass --check-name, so this repository's
+        # copy of the shared script must keep that path working on its own.
+        script = str(pathlib.Path(__file__).resolve().parents[1] / "scripts/assert-admission-checks")
+        with tempfile.TemporaryDirectory() as temporary:
+            checks = pathlib.Path(temporary) / "checks.json"
+            checks.write_text(json.dumps([{"name": "Plugin contract", "bucket": "pass"}]))
+            subprocess.run([script, "--check-name", "Plugin contract", "--checks", str(checks)], check=True)
+            checks.write_text(json.dumps([{"name": "Script checks", "bucket": "pass"}]))
+            result = subprocess.run(
+                [script, "--check-name", "Plugin contract", "--checks", str(checks)], capture_output=True
+            )
+            self.assertNotEqual(0, result.returncode)
+
     def test_policy_capture_urls_are_commit_pinned(self):
         sha = "a" * 40
         policy, invariants = pinned_policy_urls(sha)
