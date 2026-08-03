@@ -115,7 +115,8 @@ jobs:
 
           readiness_run = re.fullmatch(r"autorelease/readiness-(\d+)", head_ref)
           if (
-              len(protected) == 1
+              len(files) == 1
+              and len(protected) == 1
               and re.fullmatch(r"readiness/[A-Za-z0-9._-]+\.json", protected[0])
               and readiness_run
               and author == "github-actions[bot]"
@@ -135,6 +136,7 @@ jobs:
               direct_parent = [parent.get("sha") for parent in commit.get("parents", [])] == [base]
               trusted_run = (
                   protected[0] == f"readiness/{expected_filename}"
+                  and record["misePhpCommit"] == base
                   and run.get("path") == ".github/workflows/autorelease-consumer.yml"
                   and run.get("event") in {"schedule", "workflow_dispatch"}
                   and run.get("head_branch") == "main"
