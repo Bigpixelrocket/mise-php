@@ -34,6 +34,7 @@ SECRET_RE = re.compile(
     r"|\bsk-[A-Za-z0-9_-]{20,}\b"
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REQUIRED_PLAN_CHECKS = ["Plugin contract"]
 READINESS_RECORD_KEYS = {
     "schemaVersion", "actionKey", "state", "ready", "phpBinPolicyCommit",
     "policyDigest", "policyInvariantsDigest", "misePhpCommit",
@@ -269,7 +270,7 @@ def admit(
         raise AdmissionError("plan repository authority is invalid")
     if plan.get("editsRequired") is not True:
         raise AdmissionError("changed accepted policy requires a synchronized snapshot edit")
-    if plan.get("requiredChecks") != ["Plugin contract"]:
+    if plan.get("requiredChecks") != REQUIRED_PLAN_CHECKS:
         raise AdmissionError("required deterministic checks changed")
     if plan.get("risk") not in {"routine", "compatibility", "lifecycle", "recovery", "policy-sensitive"}:
         raise AdmissionError("invalid plan risk")
