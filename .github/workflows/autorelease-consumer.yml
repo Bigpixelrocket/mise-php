@@ -70,6 +70,7 @@ jobs:
             --arg policyInvariantsDigest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
             --arg phpBinOperatorCommit "${{ steps.operator.outputs.commit }}" \
             --arg operatorState "${{ steps.operator.outputs.state }}" \
+            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase investigation)" \
             '{
               contractVersion:1,
               phase:"investigation",
@@ -78,12 +79,7 @@ jobs:
               preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState},
               allowedAuthority:["read_repository","read_captured_policy"],
               nonGoals:["upstream_php_classification","repository_mutation","required_check_execution","irreversible_github_effect"],
-              completionCriteria:[
-                {id:"phase-goal-correct",requirement:"The goal matches exact inputs.",evidenceRequired:"Exact preconditions."},
-                {id:"policy-difference-explained",requirement:"Every required local change is bound to captured policy.",evidenceRequired:"Policy digest and JSON locator."},
-                {id:"authority-explicit",requirement:"Paths and checks are explicit.",evidenceRequired:"Allowed paths and required checks."},
-                {id:"no-unresolved-work",requirement:"No contradiction or stop condition remains.",evidenceRequired:"Empty unresolved list."}
-              ],
+              completionCriteria:$completionCriteria,
               stopConditions:["missing_or_contradictory_policy","changed_precondition","required_protected_change"]
             }' > autorelease-run/event-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
@@ -166,17 +162,12 @@ jobs:
           path: autorelease-run
       - name: Prepare implementation contract and prompt
         run: |
-          jq \
+          jq --argjson completionCriteria "$(./scripts/prepare-agent-task --phase implementation)" \
             '.phase="implementation"
              | .goal="Implement the admitted mise-php policy synchronization at the exact base."
              | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
              | .nonGoals=["protected_control_change","irreversible_github_effect"]
-             | .completionCriteria=[
-                {id:"phase-goal-correct",requirement:"Goal and preconditions remain exact.",evidenceRequired:"Plan digest and base SHA."},
-                {id:"admitted-diff-complete",requirement:"Diff is complete and admitted.",evidenceRequired:"Final diff and path comparison."},
-                {id:"advisory-checks-recorded",requirement:"All checks ran.",evidenceRequired:"Commands and results."},
-                {id:"no-unresolved-work",requirement:"No in-scope work remains.",evidenceRequired:"Empty unresolved list."}
-             ]' \
+             | .completionCriteria=$completionCriteria' \
             autorelease-run/event-contract.json > autorelease-run/implementation-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
           phase="sha256:$(shasum -a 256 .github/codex/autorelease/implementation.md | awk '{print $1}')"
@@ -323,17 +314,14 @@ jobs:
           git apply --index autorelease-run/sealed/sealed.patch
           fingerprint="sha256:$(shasum -a 256 autorelease-run/authoritative-checks.log | awk '{print $1}')"
           jq --arg goal "Repair the retained authoritative failure $fingerprint without expanding the admitted diff." \
+            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase repair)" \
             '.phase="repair"
              | .goal=$goal
              | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
              | .nonGoals=["protected_control_change","irreversible_github_effect"]
              | .stopConditions=["changed_precondition","repeated_or_unrelated_failure","required_protected_change"]
-             | .completionCriteria=[
-                {id:"phase-goal-correct",requirement:"The repair goal matches the exact failure and inputs.",evidenceRequired:"Failure fingerprint and exact base."},
-                {id:"failure-cause-removed",requirement:"The named failure is removed without weakening a gate.",evidenceRequired:"Minimal admitted diff and reproduction evidence."},
-                {id:"advisory-checks-recorded",requirement:"All advisory checks ran.",evidenceRequired:"Commands and results."},
-                {id:"no-unresolved-work",requirement:"No repeated or unrelated failure remains.",evidenceRequired:"Empty unresolved list."}
-             ]' autorelease-run/implementation-contract.json > autorelease-run/repair-contract.json
+             | .completionCriteria=$completionCriteria' \
+            autorelease-run/implementation-contract.json > autorelease-run/repair-contract.json
           shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
           phase="sha256:$(shasum -a 256 .github/codex/autorelease/repair.md | awk '{print $1}')"
           event="sha256:$(shasum -a 256 autorelease-run/repair-contract.json | awk '{print $1}')"

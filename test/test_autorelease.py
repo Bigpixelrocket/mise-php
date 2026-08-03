@@ -150,6 +150,41 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             consumer,
         )
 
+    def test_agent_task_criteria_come_from_one_table(self):
+        # Criteria used to be authored as jq literals in three workflow steps, so the
+        # only way to check them was matching workflow source text. They now come from
+        # one script and the emitted JSON is what the agent actually receives.
+        script = str(pathlib.Path(__file__).resolve().parents[1] / "scripts/prepare-agent-task")
+        expected = {
+            "investigation": [
+                "phase-goal-correct",
+                "policy-difference-explained",
+                "authority-explicit",
+                "no-unresolved-work",
+            ],
+            "implementation": [
+                "phase-goal-correct",
+                "admitted-diff-complete",
+                "advisory-checks-recorded",
+                "no-unresolved-work",
+            ],
+            "repair": [
+                "phase-goal-correct",
+                "failure-cause-removed",
+                "advisory-checks-recorded",
+                "no-unresolved-work",
+            ],
+        }
+        for phase, ids in expected.items():
+            emitted = json.loads(
+                subprocess.run([script, "--phase", phase], capture_output=True, check=True).stdout
+            )
+            self.assertEqual(ids, [criterion["id"] for criterion in emitted], phase)
+            for criterion in emitted:
+                self.assertEqual(["id", "requirement", "evidenceRequired"], list(criterion), phase)
+                self.assertTrue(all(criterion.values()), phase)
+        self.assertNotEqual(0, subprocess.run([script, "--phase", "audit"], capture_output=True).returncode)
+
     def test_assert_admission_checks_covers_the_plugin_contract_bucket(self):
         # The consumer merge gates only ever pass --check-name, so this repository's
         # copy of the shared script must keep that path working on its own.

@@ -8,6 +8,7 @@
 /scripts/admit-autorelease-plan @loadinglucian
 /scripts/assert-admission-checks @loadinglucian
 /scripts/dispatch-pr-checks @loadinglucian
+/scripts/prepare-agent-task @loadinglucian
 /scripts/seal-autorelease-patch @loadinglucian
 /scripts/validate-codex-action-inputs @loadinglucian
 /scripts/validate-structured-output-schemas @loadinglucian

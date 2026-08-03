@@ -10,6 +10,7 @@
     "scripts/admit-autorelease-plan",
     "scripts/assert-admission-checks",
     "scripts/dispatch-pr-checks",
+    "scripts/prepare-agent-task",
     "scripts/seal-autorelease-patch",
     "scripts/validate-codex-action-inputs",
     "scripts/validate-structured-output-schemas",
