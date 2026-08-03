@@ -27,8 +27,6 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             invariants = root / "invariants.json"
             commit = root / "commit.json"
             snapshot = root / "snapshot.json"
-            events = root / "events"
-            events.mkdir()
             invariants.write_text('{"schemaVersion":1,"target":{"os":"macOS","minimumVersion":"26.0","architecture":"arm64","sapi":"cli"},"allowPrereleases":false,"historicalExactVersionsRemainInstallable":true,"immutablePublishedAssets":true}\n')
             policy.write_text(json.dumps({
                 "schemaVersion": 1,
@@ -47,7 +45,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 "maintainedBranches": ["8.5"],
                 "generated": True,
             })
-            result = compare(policy, invariants, commit, snapshot, events)
+            result = compare(policy, invariants, commit, snapshot)
             self.assertEqual("quiet", result["trigger"])
             policy.write_text(json.dumps({
                 "schemaVersion": 1,
@@ -57,7 +55,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 "actionKey": "bootstrap",
                 "acceptedAt": "2026-07-27T00:00:00Z",
             }) + "\n")
-            self.assertEqual("policy_changed", compare(policy, invariants, commit, snapshot, events)["trigger"])
+            self.assertEqual("policy_changed", compare(policy, invariants, commit, snapshot)["trigger"])
 
     def test_readiness_requires_exact_commits_and_digests(self):
         result = readiness(

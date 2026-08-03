@@ -79,7 +79,7 @@ jobs:
             --invariants-output autorelease-run/policy-invariants.json \
             --commit-output autorelease-run/php-bin-main.json \
             --manifest autorelease-run/policy-capture.json
-      - name: Compare only opaque policy and event digests
+      - name: Compare only opaque policy digests
         id: compare
         run: |
           ./scripts/consume-php-policy compare \
@@ -87,7 +87,6 @@ jobs:
             --invariants autorelease-run/policy-invariants.json \
             --policy-commit autorelease-run/php-bin-main.json \
             --snapshot support-snapshot.json \
-            --events autorelease-events \
             --output autorelease-run/decision.json
           echo "trigger=$(jq -r .trigger autorelease-run/decision.json)" >> "$GITHUB_OUTPUT"
       - name: Prepare exact investigation contract

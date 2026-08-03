@@ -199,7 +199,6 @@ def compare(
     invariants: pathlib.Path,
     policy_commit: pathlib.Path,
     snapshot: pathlib.Path,
-    events: pathlib.Path,
 ) -> dict[str, Any]:
     policy_digest = digest(policy.read_bytes())
     policy_document = load(policy)
@@ -282,17 +281,7 @@ def compare(
         or existing.get("generated") is not True
     ):
         raise ConsumerError("local support snapshot has unknown, missing, or invalid fields")
-    incomplete = []
-    if events.exists():
-        for path in events.glob("*.json"):
-            event = load(path)
-            if event.get("state") not in {"mise_ready", "complete"}:
-                incomplete.append(event.get("actionKey"))
-    if len(incomplete) > 1 or any(not ACTION_KEY_RE.fullmatch(value or "") for value in incomplete):
-        raise ConsumerError("local event state is ambiguous or invalid")
-    if incomplete:
-        trigger = "event_incomplete"
-    elif (
+    if (
         existing.get("policyDigest") != policy_digest
         or existing.get("policyInvariantsDigest") != invariants_digest
         or existing.get("phpBinPolicyCommit") != commit_sha
@@ -304,11 +293,10 @@ def compare(
     return {
         "schemaVersion": 1,
         "trigger": trigger,
-        "actionKey": incomplete[0] if incomplete else policy_document.get("actionKey"),
+        "actionKey": policy_document.get("actionKey"),
         "policyDigest": policy_digest,
         "policyInvariantsDigest": invariants_digest,
         "phpBinPolicyCommit": commit_sha,
-        "incompleteActions": sorted(incomplete),
         "modelCall": trigger != "quiet",
     }
 
@@ -364,7 +352,6 @@ def main() -> int:
     compare_parser.add_argument("--invariants", required=True, type=pathlib.Path)
     compare_parser.add_argument("--policy-commit", required=True, type=pathlib.Path)
     compare_parser.add_argument("--snapshot", required=True, type=pathlib.Path)
-    compare_parser.add_argument("--events", required=True, type=pathlib.Path)
     compare_parser.add_argument("--output", required=True, type=pathlib.Path)
     ready = sub.add_parser("readiness")
     ready.add_argument("--action-key", required=True)
@@ -390,7 +377,7 @@ def main() -> int:
         elif args.command == "action-filename":
             print(action_filename(args.action_key, args.suffix))
         elif args.command == "compare":
-            result = compare(args.policy, args.invariants, args.policy_commit, args.snapshot, args.events)
+            result = compare(args.policy, args.invariants, args.policy_commit, args.snapshot)
             write(args.output, result)
             print(json.dumps(result))
         else:

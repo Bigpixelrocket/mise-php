@@ -72,7 +72,7 @@ invocation, exact CLI version, and canonical `config.toml` loading against the
 reviewed offline contract in `.github/codex-action-contract.json` before
 exercising autorelease behavior.
 
-Inspect `support-snapshot.json`, `autorelease-events/`, `readiness/`, retained
+Inspect `support-snapshot.json`, `readiness/`, retained
 workflow artifacts, and the event's GitHub issue. Recovery corrects the cause
 and reruns the normal admitted path; it never disables checksum, policy,
 sealing, exact-SHA, or publication gates.
