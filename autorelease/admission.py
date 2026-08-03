@@ -85,7 +85,13 @@ def contained_path(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
 
 
 def protected(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in PROTECTED)
+    """Match a repository path against the protected patterns.
+
+    fnmatchcase, not fnmatch: fnmatch runs os.path.normcase first, which makes the
+    answer depend on the host platform. Git paths are case-sensitive bytes and this
+    gate decides admission, so the comparison has to be the same everywhere.
+    """
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in PROTECTED)
 
 
 def validate_readiness_record(record: Any) -> None:
@@ -291,11 +297,11 @@ def admit(
             if protected(pattern):
                 raise AdmissionError(f"runtime plan admits protected path: {pattern}")
             flattened.append(pattern)
-    if not any(fnmatch.fnmatch("support-snapshot.json", pattern) for pattern in flattened):
+    if not any(fnmatch.fnmatchcase("support-snapshot.json", pattern) for pattern in flattened):
         raise AdmissionError("policy synchronization does not admit the generated support snapshot")
     # Sealing rejects a snapshot edit whose lib/policy.lua was not regenerated, so a
     # plan that cannot carry the regenerated file is unsatisfiable rather than risky.
-    if not any(fnmatch.fnmatch("lib/policy.lua", pattern) for pattern in flattened):
+    if not any(fnmatch.fnmatchcase("lib/policy.lua", pattern) for pattern in flattened):
         raise AdmissionError("policy synchronization does not admit the generated lib/policy.lua")
     operations = plan.get("agentOperations")
     if not isinstance(operations, list) or not all(isinstance(item, str) for item in operations):
@@ -362,7 +368,7 @@ def seal(
     files = []
     for path in paths:
         candidate = repo / path
-        if protected(path) or not any(fnmatch.fnmatch(path, pattern) for pattern in allowed):
+        if protected(path) or not any(fnmatch.fnmatchcase(path, pattern) for pattern in allowed):
             raise AdmissionError(f"forbidden diff path: {path}")
         if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 2_000_000:
             raise AdmissionError(f"unsupported diff entry: {path}")
