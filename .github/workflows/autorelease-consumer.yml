@@ -46,6 +46,12 @@ jobs:
           PHP_BIN_COMMIT: ${{ steps.operator.outputs.commit }}
         run: |
           mapfile -t shared < <(jq -r '.paths[]' autorelease/shared-files.json)
+          # mapfile reports success even when the substitution failed, so an
+          # absent, unparseable, or empty manifest would disable the gate.
+          if [[ "${#shared[@]}" -eq 0 ]]; then
+            echo "Shared-file manifest is missing, unparseable, or empty: autorelease/shared-files.json" >&2
+            exit 1
+          fi
           for path in "${shared[@]}"; do
             gh api "repos/Bigpixelrocket/php-bin/contents/$path?ref=$PHP_BIN_COMMIT" \
               > "$RUNNER_TEMP/shared-file.json"

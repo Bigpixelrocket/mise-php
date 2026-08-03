@@ -135,6 +135,16 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertEqual(1, manifest["schemaVersion"])
         paths = manifest["paths"]
         self.assertEqual(sorted(set(paths)), paths)
+        # An emptied manifest satisfies every shape assertion while gating nothing,
+        # so the scripts the gate exists for are named outright.
+        self.assertLessEqual(
+            {
+                "scripts/assert-admission-checks",
+                "scripts/check-public-language.sh",
+                "scripts/dispatch-pr-checks",
+            },
+            set(paths),
+        )
         for path in paths:
             self.assertTrue((root / path).is_file(), path)
             # A shared file an agent may rewrite would fail the gate on the next
@@ -143,6 +153,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertTrue(protected("autorelease/shared-files.json"))
         consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
         self.assertIn("jq -r '.paths[]' autorelease/shared-files.json", consumer)
+        self.assertIn('if [[ "${#shared[@]}" -eq 0 ]]; then', consumer)
 
     def test_secret_scanner_catches_sk_tokens(self):
         for secret in (
