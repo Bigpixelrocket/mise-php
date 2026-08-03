@@ -322,6 +322,67 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             with self.assertRaises(AdmissionError):
                 verify_merge(root, mutated, manifest, {"Plugin contract": "success"}, state, state)
 
+    def test_merge_admission_cli_prints_the_verdict_and_fails_closed(self):
+        # The merge job reaches the gate through this entry point and reads nothing
+        # but its exit status, so a rejection that exits 0 would merge an unadmitted
+        # patch. The in-process test above covers what the gate decides.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for arguments in (
+                ["init", "-q", "-b", "main"],
+                ["config", "user.name", "test"],
+                ["config", "user.email", "test@invalid"],
+            ):
+                subprocess.run(["git", *arguments], cwd=root, check=True)
+            (root / "file.txt").write_text("base\n")
+            subprocess.run(["git", "add", "file.txt"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=root, check=True)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, stdout=subprocess.PIPE
+            ).stdout.strip()
+            (root / "file.txt").write_text("validated\n")
+            subprocess.run(["git", "add", "file.txt"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "validated"], cwd=root, check=True)
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, stdout=subprocess.PIPE
+            ).stdout.strip()
+            paths = {
+                "manifest": {
+                    "baseSha": base,
+                    "files": [{
+                        "path": "file.txt",
+                        "digest": digest((root / "file.txt").read_bytes()),
+                        "mode": "0o644",
+                    }],
+                },
+                "checks": {"Plugin contract": "success"},
+                "preconditions": {"misePhpHead": base},
+                "current": {"misePhpHead": base},
+            }
+            for name, body in paths.items():
+                (root / f"{name}.json").write_text(json.dumps(body) + "\n")
+
+            def run_gate(expected_head):
+                return subprocess.run(
+                    [
+                        "./scripts/verify-merge-admission",
+                        "--repo", str(root),
+                        "--head", expected_head,
+                        "--manifest", str(root / "manifest.json"),
+                        "--checks", str(root / "checks.json"),
+                        "--preconditions", str(root / "preconditions.json"),
+                        "--current", str(root / "current.json"),
+                    ],
+                    check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+
+            admitted = run_gate(head)
+            self.assertEqual(0, admitted.returncode, admitted.stderr)
+            self.assertTrue(json.loads(admitted.stdout)["admitted"])
+            rejected = run_gate(base)
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("mise autorelease admission rejected", rejected.stderr)
+
     # Returns an admissible plan plus the remaining admit() arguments by keyword, so
     # a test can vary one part of the plan without rebuilding the policy capture.
     def admission_fixture(self, root):
