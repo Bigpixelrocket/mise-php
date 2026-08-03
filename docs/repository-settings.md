@@ -46,7 +46,7 @@ still rejects event/readiness paths as agent-authored changes.
 ```bash
 ./php-bin/scripts/snapshot-github-admin-state \
   --repo bigpixelrocket/mise-php \
-  --output mise-php/docs/admin-state/mise-php.json
+  --output mise-php/docs/admin-state/mise-php-after.json
 
 ./php-bin/scripts/configure-github-autorelease \
   --repo bigpixelrocket/mise-php \
