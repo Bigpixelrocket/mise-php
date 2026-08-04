@@ -21,7 +21,9 @@ Required repository state:
   requests (a solo owner cannot approve their own PR, so an owner review
   requirement was unsatisfiable there); any other author touching a path in
   `autorelease/protected-paths.json` requires an exact-head `loadinglucian`
-  approval.
+  approval. The sole deterministic exception is a single `readiness/*.json`
+  record authored by `github-actions[bot]` on the trusted consumer run's own
+  branch, validated against the exact run that wrote it.
 - Bind the required checks to the GitHub Actions app, preventing another app
   from satisfying the same context name.
 - Enable squash merge, auto-merge, update branch, and automatic head-branch
