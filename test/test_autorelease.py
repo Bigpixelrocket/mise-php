@@ -588,6 +588,16 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 seal(repo, base, **arguments)
             self.assertIn("policy.lua", str(ctx.exception))
 
+    def test_protected_controls_pass_owner_authored_changes_before_bot_exemptions(self):
+        # The owner short-circuit must sit after the no-protected-path exit and
+        # before the automation exemption, so it can never widen what a bot
+        # identity is allowed to merge.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        protected_workflow = (root / ".github/workflows/protected-controls.yml").read_text()
+        owner_pass = protected_workflow.index("if author.lower() == reviewer:")
+        self.assertLess(protected_workflow.index("No protected control path changed."), owner_pass)
+        self.assertLess(owner_pass, protected_workflow.index('re.fullmatch(r"autorelease/readiness-'))
+
     def test_token_created_prs_explicitly_dispatch_required_checks(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         ci = (root / ".github/workflows/ci.yml").read_text()
