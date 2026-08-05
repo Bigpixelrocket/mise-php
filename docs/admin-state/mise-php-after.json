@@ -14,7 +14,7 @@
     "url": "https://api.github.com/repos/Bigpixelrocket/mise-php/subscription"
   },
   "branchProtection": null,
-  "capturedAt": "2026-08-04T12:48:57Z",
+  "capturedAt": "2026-08-05T08:16:47Z",
   "environments": {
     "environments": [
       {
@@ -186,12 +186,12 @@
     ],
     "verified_allowed": false
   },
-  "snapshotDigest": "sha256:3fa95b31e4ca35cae67c7bdc8186f5e2eca04d4ad6472f7358c3fed99a5afbe0",
+  "snapshotDigest": "sha256:da186692248707dc17c433cfe7abbaca73586dfa616dc3149083dd9d6268927c",
   "variables": [
     "AUTORELEASE_OWNER"
   ],
   "workflowPermissions": {
-    "can_approve_pull_request_reviews": false,
+    "can_approve_pull_request_reviews": true,
     "default_workflow_permissions": "read"
   }
 }
