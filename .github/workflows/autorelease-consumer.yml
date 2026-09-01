@@ -130,7 +130,7 @@ jobs:
           cp .codex/investigation.config.toml "$RUNNER_TEMP/codex-home/config.toml"
       - name: Run repository-scoped offline Codex investigation
         if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: 0.145.0
@@ -218,7 +218,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/codex-home"
           cp .codex/implementation.config.toml "$RUNNER_TEMP/codex-home/config.toml"
       - name: Run offline Codex implementation
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: 0.145.0
@@ -379,7 +379,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/codex-home"
           cp .codex/repair.config.toml "$RUNNER_TEMP/codex-home/config.toml"
       - name: Run one offline Codex repair
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: 0.145.0
