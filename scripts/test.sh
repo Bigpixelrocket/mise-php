@@ -182,10 +182,13 @@ if grep -F '@PHP_BIN_PREFIX@' "$ROOT_851/bin/php-config" "$ROOT_851/bin/phpize";
 fi
 
 # Edit the 8.5.1 settings the way a user would: raise a limit, turn a default
-# extension off, and add an extension built there with PIE.
+# extension off, and add extensions built there with PIE, one by name and one
+# by absolute path. A value ending in "/" must not break the carry-forward.
 sed -i '' 's/^extension=demo_on$/;extension=demo_on/' "$ROOT_851/bin/php.ini"
-printf 'memory_limit = 512M\nextension=userbuilt\n' >> "$ROOT_851/bin/php.ini"
+printf 'memory_limit = 512M\nextension=userbuilt\nextension=%s\nextension=/opt/ext/\n' \
+  "$ROOT_851/lib/php/extensions/abspath.so" >> "$ROOT_851/bin/php.ini"
 : > "$ROOT_851/lib/php/extensions/userbuilt.so"
+: > "$ROOT_851/lib/php/extensions/abspath.so"
 
 # A symbolic link named like a newer patch must never be a carry-forward source.
 mkdir -p "$TEMP_DIR/decoy/bin"
@@ -207,6 +210,9 @@ grep -Fx ';extension=demo_on' "$INI_852"
 grep -Fx ';extension=demo_off' "$INI_852"
 grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_852" \
   | grep -Fx ';extension=userbuilt'
+grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_852" \
+  | grep -Fx ";extension=$ROOT_851/lib/php/extensions/abspath.so"
+grep -Fx 'extension=/opt/ext/' "$INI_852"
 grep -Fx 'extension=demo_new' "$INI_852"
 if grep -Fx 'memory_limit = 1G' "$INI_852"; then
   echo "Settings were carried from a symbolic link." >&2

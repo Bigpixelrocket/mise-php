@@ -151,16 +151,24 @@ local function parse_extension_line(line)
         return nil
     end
 
-    local name = value:match("([^/]+)$"):gsub("%.so$", ""):lower()
+    -- A value ending in "/" names no file; leave that line untouched.
+    local base = value:match("([^/]+)$")
+    if base == nil then
+        return nil
+    end
+
+    local name = base:gsub("%.so$", ""):lower()
     return { commented = commented, value = value, name = name }
 end
 
--- True when PHP started from this install would find the extension a line
--- names: an absolute path must exist, and a name must resolve inside this
--- install's own extension_dir.
+-- True when the extension a line names belongs to this install: an absolute
+-- path must exist inside this install's own extension_dir, and a name must
+-- resolve there. A path into another install stays unavailable, so a binary
+-- built against a sibling is never loaded from here.
 local function extension_available(value, extension_dir)
     if value:sub(1, 1) == "/" then
-        return file_exists(value)
+        return value:sub(1, #extension_dir + 1) == extension_dir .. "/"
+            and file_exists(value)
     end
 
     return file_exists(extension_dir .. "/" .. value)
