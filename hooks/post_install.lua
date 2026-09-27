@@ -246,54 +246,39 @@ local function fresh_ini(extension_dir, manifest)
     return table.concat(lines, "\n") .. "\n"
 end
 
--- Classify a section header: nil for any other line, true for a special
--- section, false for an ordinary one. PHP treats a section whose name, quotes
--- removed, starts with PATH or HOST in any case as special: it never loads
--- extensions from one, and from the first such section to the end of the file
--- no other setting reaches the global scope, even under a later ordinary
--- header.
-local function special_section(line)
-    local name = line:match("^%s*%[(.-)%]")
-    if name == nil then
-        return nil
-    end
-
-    name = name:match("^%s*(.-)%s*$")
-    name = (name:match('^"(.*)"$') or name:match("^'(.*)'$") or name):lower()
-    return name:sub(1, 4) == "path" or name:sub(1, 4) == "host"
+-- A line whose first non-blank character is "[" opens an INI section.
+local function section_header(line)
+    return line:match("^%s*%[") ~= nil
 end
 
 -- Copy the source install's settings, point extension_dir at this install,
 -- comment out any active extension this install does not have, and add the
--- defaults for bundled extensions the source never loads. The managed
--- extension_dir and the added defaults go before the first special section,
--- the only part of the file PHP applies globally. Extension binaries are never
--- copied: one built against another install stays there.
+-- defaults for bundled extensions the source never mentions. Extension
+-- binaries are never copied: one built against another install stays there.
+--
+-- PHP applies every line before the first section header globally, whatever
+-- the sections are called, while a [PATH=...] or [HOST=...] section holds
+-- settings and extensions back. So the managed extension_dir and the added
+-- defaults go before the first header, and section names are never
+-- interpreted.
 local function carried_ini(previous, source_name, extension_dir, manifest)
     local lines = {}
     local mentioned = {}
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
     local has_extension_dir = false
-    local in_special = false
-    local first_special = nil
+    local first_section = nil
 
     for _, line in ipairs(split_lines(previous)) do
         local extension = parse_extension_line(line)
-        local section = special_section(line)
-        if section ~= nil then
-            in_special = section
-            if section and first_special == nil then
-                first_special = #lines + 1
-            end
+        if first_section == nil and section_header(line) then
+            first_section = #lines + 1
         end
 
         if line:match("^%s*extension_dir%s*=") then
             table.insert(lines, managed_line)
-            has_extension_dir = has_extension_dir or first_special == nil
+            has_extension_dir = has_extension_dir or first_section == nil
         elseif extension ~= nil then
-            if not in_special then
-                mentioned[extension.name] = true
-            end
+            mentioned[extension.name] = true
             if not extension.commented and not extension_available(extension.value, extension_dir) then
                 table.insert(lines, MISSING_NOTE)
                 table.insert(lines, ";" .. line:match("^%s*(.-)%s*$"))
@@ -308,8 +293,8 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
     if not has_extension_dir then
         table.insert(lines, 1, managed_line)
         table.insert(lines, 1, "; Managed by mise-php: rewritten to this install's own folder.")
-        if first_special ~= nil then
-            first_special = first_special + 2
+        if first_section ~= nil then
+            first_section = first_section + 2
         end
     end
 
@@ -322,10 +307,10 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
         end
     end
     if #added > 0 then
-        local at = first_special or (#lines + 1)
+        local at = first_section or (#lines + 1)
         table.insert(added, 1, "; Bundled shared extensions not in the settings carried from " .. source_name)
         table.insert(added, 1, "")
-        if first_special ~= nil then
+        if first_section ~= nil then
             table.insert(added, "")
         end
         for offset, line in ipairs(added) do
