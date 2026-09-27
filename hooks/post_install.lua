@@ -16,8 +16,8 @@ local HEADER = [[
 ;
 ; PHP reads this file whenever this install's bin/php starts, through the mise
 ; shim, an absolute path, or a symlink. Edit it freely: installing a newer
-; patch of the same PHP branch copies these settings forward and rewrites only
-; the extension_dir line.
+; patch of the same PHP branch copies these settings forward, rewrites the
+; extension_dir line, and comments out extensions the new install lacks.
 ;
 ; Turn a bundled extension on or off by removing or adding the leading ";" on
 ; its line below. Build other extensions with PIE, for example:
@@ -125,8 +125,9 @@ local function default_lines(extension)
 end
 
 -- Recognise extension= and zend_extension= lines, active or commented out, and
--- return the extension each one names. The value may be a bare name, a file
--- name, or a path, optionally quoted and followed by an inline comment.
+-- return the extension each one names. PHP matches both directive names in any
+-- case. The value may be a bare name, a file name, or a path, optionally quoted
+-- and followed by an inline comment.
 local function parse_extension_line(line)
     local body = line:match("^%s*(.-)%s*$")
     local commented = false
@@ -137,6 +138,7 @@ local function parse_extension_line(line)
     end
 
     local directive, value = body:match("^([%a_]+)%s*=%s*(.-)%s*$")
+    directive = directive and directive:lower()
     if directive ~= "extension" and directive ~= "zend_extension" then
         return nil
     end
@@ -164,8 +166,13 @@ end
 -- True when the extension a line names belongs to this install: an absolute
 -- path must exist inside this install's own extension_dir, and a name must
 -- resolve there. A path into another install stays unavailable, so a binary
--- built against a sibling is never loaded from here.
+-- built against a sibling is never loaded from here; a ".." segment could
+-- climb out of extension_dir, so it never counts as available.
 local function extension_available(value, extension_dir)
+    if ("/" .. value .. "/"):find("/%.%./") ~= nil then
+        return false
+    end
+
     if value:sub(1, 1) == "/" then
         return value:sub(1, #extension_dir + 1) == extension_dir .. "/"
             and file_exists(value)
@@ -239,23 +246,48 @@ local function fresh_ini(extension_dir, manifest)
     return table.concat(lines, "\n") .. "\n"
 end
 
+-- PHP applies a [PATH=...] or [HOST=...] section only to matching scripts and
+-- never loads extensions from one, so lines added to the global scope must
+-- stay out of such a section.
+local function special_section(line)
+    local header = line:lower():match("^%s*%[%s*(.-)%s*%]")
+    if header == nil then
+        return nil
+    end
+
+    return header:match("^path%s*=") ~= nil or header:match("^host%s*=") ~= nil
+end
+
 -- Copy the source install's settings, point extension_dir at this install,
--- comment out any active extension this install does not have, and append the
--- defaults for bundled extensions the source never mentioned. Extension
--- binaries are never copied: one built against another install stays there.
+-- comment out any active extension this install does not have, and add the
+-- defaults for bundled extensions the source never mentioned in its global
+-- scope. Extension binaries are never copied: one built against another
+-- install stays there.
 local function carried_ini(previous, source_name, extension_dir, manifest)
     local lines = {}
     local mentioned = {}
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
     local has_extension_dir = false
+    local in_special = false
+    local first_special = nil
 
     for _, line in ipairs(split_lines(previous)) do
         local extension = parse_extension_line(line)
+        local section = special_section(line)
+        if section ~= nil then
+            in_special = section
+            if section and first_special == nil then
+                first_special = #lines + 1
+            end
+        end
+
         if line:match("^%s*extension_dir%s*=") then
             table.insert(lines, managed_line)
-            has_extension_dir = true
+            has_extension_dir = has_extension_dir or not in_special
         elseif extension ~= nil then
-            mentioned[extension.name] = true
+            if not in_special then
+                mentioned[extension.name] = true
+            end
             if not extension.commented and not extension_available(extension.value, extension_dir) then
                 table.insert(lines, MISSING_NOTE)
                 table.insert(lines, ";" .. line:match("^%s*(.-)%s*$"))
@@ -270,6 +302,9 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
     if not has_extension_dir then
         table.insert(lines, 1, managed_line)
         table.insert(lines, 1, "; Managed by mise-php: rewritten to this install's own folder.")
+        if first_special ~= nil then
+            first_special = first_special + 2
+        end
     end
 
     local added = {}
@@ -281,10 +316,14 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
         end
     end
     if #added > 0 then
-        table.insert(lines, "")
-        table.insert(lines, "; Bundled shared extensions not in the settings carried from " .. source_name)
-        for _, line in ipairs(added) do
-            table.insert(lines, line)
+        local at = first_special or (#lines + 1)
+        table.insert(added, 1, "; Bundled shared extensions not in the settings carried from " .. source_name)
+        table.insert(added, 1, "")
+        if first_special ~= nil then
+            table.insert(added, "")
+        end
+        for offset, line in ipairs(added) do
+            table.insert(lines, at + offset - 1, line)
         end
     end
 
