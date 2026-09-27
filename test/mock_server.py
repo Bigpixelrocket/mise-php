@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Serve fixture php-bin releases in the GitHub API shape the plugin reads.
+
+releases.json in the asset folder lists the releases in API order, newest
+published first, as [{"tag": "8.4.99", "draft": false}, ...]. Every archive is
+served as php-<tag>-cli-macos-aarch64.tar.gz beside one shared SHA256SUMS.
+"""
 
 import json
 import sys
@@ -9,62 +15,28 @@ from urllib.parse import urlparse
 
 PORT = int(sys.argv[1])
 ASSET_DIR = Path(sys.argv[2]).resolve()
-VERSION = "8.4.99"
-EOL_VERSION = "8.1.99"
-FUTURE_VERSION = "9.0.1"
-ARCHIVE_NAME = f"php-{VERSION}-cli-macos-aarch64.tar.gz"
-EOL_ARCHIVE_NAME = f"php-{EOL_VERSION}-cli-macos-aarch64.tar.gz"
-FUTURE_ARCHIVE_NAME = f"php-{FUTURE_VERSION}-cli-macos-aarch64.tar.gz"
+RELEASES_PATH = "/repos/bigpixelrocket/php-bin/releases"
 
 
-def release_payload() -> dict:
+def archive_name(tag: str) -> str:
+    return f"php-{tag}-cli-macos-aarch64.tar.gz"
+
+
+def releases() -> list:
+    return json.loads((ASSET_DIR / "releases.json").read_text())
+
+
+def release_payload(release: dict) -> dict:
     base_url = f"http://127.0.0.1:{PORT}/assets"
+    tag = release["tag"]
     return {
-        "tag_name": VERSION,
-        "draft": False,
+        "tag_name": tag,
+        "draft": release.get("draft", False),
         "prerelease": False,
         "assets": [
             {
-                "name": ARCHIVE_NAME,
-                "browser_download_url": f"{base_url}/{ARCHIVE_NAME}",
-            },
-            {
-                "name": "SHA256SUMS",
-                "browser_download_url": f"{base_url}/SHA256SUMS",
-            },
-        ],
-    }
-
-
-def eol_release_payload() -> dict:
-    base_url = f"http://127.0.0.1:{PORT}/assets"
-    return {
-        "tag_name": EOL_VERSION,
-        "draft": False,
-        "prerelease": False,
-        "assets": [
-            {
-                "name": EOL_ARCHIVE_NAME,
-                "browser_download_url": f"{base_url}/{EOL_ARCHIVE_NAME}",
-            },
-            {
-                "name": "SHA256SUMS",
-                "browser_download_url": f"{base_url}/SHA256SUMS",
-            },
-        ],
-    }
-
-
-def future_release_payload() -> dict:
-    base_url = f"http://127.0.0.1:{PORT}/assets"
-    return {
-        "tag_name": FUTURE_VERSION,
-        "draft": False,
-        "prerelease": False,
-        "assets": [
-            {
-                "name": FUTURE_ARCHIVE_NAME,
-                "browser_download_url": f"{base_url}/{FUTURE_ARCHIVE_NAME}",
+                "name": archive_name(tag),
+                "browser_download_url": f"{base_url}/{archive_name(tag)}",
             },
             {
                 "name": "SHA256SUMS",
@@ -82,31 +54,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(b"ok\n", "text/plain")
             return
 
-        if path == "/repos/bigpixelrocket/php-bin/releases":
-            self.send_json(
-                [release_payload(), eol_release_payload(), future_release_payload()]
-            )
+        if path == RELEASES_PATH:
+            self.send_json([release_payload(release) for release in releases()])
             return
 
-        if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{VERSION}":
-            self.send_json(release_payload())
-            return
-        if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{EOL_VERSION}":
-            self.send_json(eol_release_payload())
-            return
-        if path == f"/repos/bigpixelrocket/php-bin/releases/tags/{FUTURE_VERSION}":
-            self.send_json(future_release_payload())
+        tag_prefix = f"{RELEASES_PATH}/tags/"
+        if path.startswith(tag_prefix):
+            tag = path[len(tag_prefix) :]
+            for release in releases():
+                if release["tag"] == tag:
+                    self.send_json(release_payload(release))
+                    return
+            self.send_error(404)
             return
 
         asset_prefix = "/assets/"
         if path.startswith(asset_prefix):
             name = path[len(asset_prefix) :]
-            if name not in {ARCHIVE_NAME, EOL_ARCHIVE_NAME, FUTURE_ARCHIVE_NAME, "SHA256SUMS"}:
-                self.send_error(404)
-                return
-
+            known = {archive_name(release["tag"]) for release in releases()} | {"SHA256SUMS"}
             asset = ASSET_DIR / name
-            if not asset.is_file():
+            if name not in known or not asset.is_file():
                 self.send_error(404)
                 return
 

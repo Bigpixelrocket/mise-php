@@ -4,8 +4,8 @@ A mise tool plugin for prebuilt, fat static PHP on Apple Silicon Macs.
 
 The plugin lists releases from
 [`bigpixelrocket/php-bin`](https://github.com/bigpixelrocket/php-bin), downloads
-the matching CLI archive, verifies its SHA-256 checksum, and exposes `bin/php`.
-It never compiles PHP locally.
+the matching CLI archive, verifies its SHA-256 checksum, exposes `bin/php`, and
+gives every install its own editable `php.ini`. It never compiles PHP locally.
 
 ## Status
 
@@ -59,11 +59,21 @@ php -v
 php -m
 ```
 
-Pin a full patch or rebuild revision when repeatability matters:
+Pin a full patch when repeatability matters:
 
 ```toml
 [tools]
 php = "8.4.5"
+```
+
+`php-bin` sometimes rebuilds a published patch with a changed recipe and
+publishes it as a revision such as `8.4.5-1`. Listings show only the plain
+patch, and installing `8.4.5` picks its newest published revision. To pin one
+exact build, name the revision:
+
+```toml
+[tools]
+php = "8.4.5-1"
 ```
 
 Mise also reads the plugin from a repository declaration:
@@ -75,6 +85,55 @@ php = "https://github.com/bigpixelrocket/mise-php"
 [tools]
 php = "8.4"
 ```
+
+## php.ini and extensions
+
+Each install has its own `php.ini` at `bin/php.ini` inside the install folder:
+
+```bash
+php --ini
+```
+
+PHP reads it however that install's `php` starts: through the mise shim, by
+absolute path from an IDE, or through a symlink. Nothing is shared between
+installs, and no environment variable is needed.
+
+Commonly used extensions ship as shared extensions in the install's
+`lib/php/extensions` folder. Each one has a line in `php.ini`; remove the
+leading `;` to turn it on, or add one to turn it off:
+
+```ini
+extension=redis
+;zend_extension=xdebug
+;extension=pcov
+```
+
+Releases built before shared extensions compile every module into `bin/php`
+and have no extension lines; their `php.ini` still holds your settings.
+
+Installing a new patch of a branch you already have copies `php.ini` from your
+newest install of that branch, so your settings and extension choices follow
+you to `8.4.6`. The `extension_dir` line is rewritten to point at the new
+install. Extensions bundled with the new install that the old file never
+mentioned get their default lines. `mise install -f` of a version you already
+have starts from your newest *other* install of that branch, so edits made only
+in the reinstalled version are replaced.
+
+### Building your own extensions
+
+Each install includes `phpize`, `php-config`, and the PHP headers, so
+[PIE](https://github.com/php/pie) and `phpize` can build extensions against it.
+Install the Xcode Command Line Tools and `autoconf` (for example
+`brew install autoconf`) first, then run PIE with the PHP you want to extend:
+
+```bash
+php pie.phar install apcu/apcu
+```
+
+PIE builds the extension into that install's `lib/php/extensions` and adds its
+line to that install's `php.ini`. Extensions you build are never copied to
+another install: after a patch upgrade their lines are commented out with a
+note, and `pie install` builds them again for the new install.
 
 ## Artifact verification
 
@@ -104,8 +163,10 @@ mise ls-remote php
 scripts/test.sh
 ```
 
-The test suite serves a local fixture release and verifies version listing,
-checksum-backed installation, and `PATH` activation through mise.
+The test suite serves local fixture releases and verifies version listing and
+ordering, rebuild-revision resolution, checksum-backed installation, `php.ini`
+creation and carry-forward, build-kit relocation, and `PATH` activation through
+mise.
 
 ## Contributing and security
 
