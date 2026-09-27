@@ -185,13 +185,16 @@ fi
 # extension off, and add extensions built there with PIE, by name, by absolute
 # path, with an upper-case directive, and by a relative path climbing into
 # 8.5.1 from any sibling's extension_dir. A value ending in "/" must not break
-# the carry-forward, and the file ends inside a [PATH=...] section.
-sed -i '' 's/^extension=demo_on$/;extension=demo_on/' "$ROOT_851/bin/php.ini"
+# the carry-forward. The file ends with a quoted special section followed by an
+# ordinary one that holds its only extension_dir, which PHP never applies
+# globally.
+sed -i '' -e 's/^extension=demo_on$/;extension=demo_on/' -e '/^extension_dir = /d' \
+  "$ROOT_851/bin/php.ini"
 {
   printf 'memory_limit = 512M\nextension=userbuilt\nextension=%s\nextension=/opt/ext/\n' \
     "$ROOT_851/lib/php/extensions/abspath.so"
   printf 'EXTENSION=uppercase\nzend_extension=../../../../8.5.1/lib/php/extensions/userbuilt.so\n'
-  printf '[PATH=/srv/app]\nmemory_limit = 64M\n'
+  printf '["PATH=/srv/app"]\nmemory_limit = 64M\n[PHP]\nextension_dir = "/old/place"\n'
 } >> "$ROOT_851/bin/php.ini"
 : > "$ROOT_851/lib/php/extensions/userbuilt.so"
 : > "$ROOT_851/lib/php/extensions/abspath.so"
@@ -210,8 +213,8 @@ rm "$INSTALLS/8.5.99"
 ROOT_852="$INSTALLS/8.5.2"
 INI_852="$ROOT_852/bin/php.ini"
 grep -Fq '"release":"8.5.2"' "$ROOT_852/share/php-bin/manifest.json"
-grep -Fx "extension_dir = \"$ROOT_852/lib/php/extensions\"" "$INI_852"
-test "$(grep -c '^extension_dir' "$INI_852")" = 1
+test "$(sed -n 2p "$INI_852")" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
+test "$(grep '^extension_dir' "$INI_852" | sort -u)" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
 grep -Fx 'memory_limit = 512M' "$INI_852"
 grep -Fx ';extension=demo_on' "$INI_852"
 grep -Fx ';extension=demo_off' "$INI_852"
@@ -224,11 +227,11 @@ grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <p
   | grep -Fx ';EXTENSION=uppercase'
 grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_852" \
   | grep -Fx ';zend_extension=../../../../8.5.1/lib/php/extensions/userbuilt.so'
-# The new bundled default lands in the global scope, before the [PATH=...]
+# The new bundled default lands in the global scope, before the special
 # section, which keeps its own settings.
 test "$(grep -n -Fx 'extension=demo_new' "$INI_852" | cut -d: -f1)" \
-  -lt "$(grep -n -Fx '[PATH=/srv/app]' "$INI_852" | cut -d: -f1)"
-test "$(tail -n 1 "$INI_852")" = 'memory_limit = 64M'
+  -lt "$(grep -n -Fx '["PATH=/srv/app"]' "$INI_852" | cut -d: -f1)"
+grep -A1 -Fx '["PATH=/srv/app"]' "$INI_852" | grep -Fx 'memory_limit = 64M'
 grep -Fx 'extension=demo_new' "$INI_852"
 if grep -Fx 'memory_limit = 1G' "$INI_852"; then
   echo "Settings were carried from a symbolic link." >&2

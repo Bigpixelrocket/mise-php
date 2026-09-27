@@ -113,7 +113,7 @@ and have no extension lines; their `php.ini` still holds your settings.
 
 Installing a new patch of a branch you already have copies `php.ini` from your
 newest install of that branch, so your settings and extension choices follow
-you to `8.4.6`. Only the `extension_dir` line changes, to point at the new
+you to `8.4.6`. The `extension_dir` line is rewritten to point at the new
 install. Extensions bundled with the new install that the old file never
 mentioned get their default lines. `mise install -f` of a version you already
 have starts from your newest *other* install of that branch, so edits made only

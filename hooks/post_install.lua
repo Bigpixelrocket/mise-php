@@ -246,23 +246,29 @@ local function fresh_ini(extension_dir, manifest)
     return table.concat(lines, "\n") .. "\n"
 end
 
--- PHP applies a [PATH=...] or [HOST=...] section only to matching scripts and
--- never loads extensions from one, so lines added to the global scope must
--- stay out of such a section.
+-- Classify a section header: nil for any other line, true for a special
+-- section, false for an ordinary one. PHP treats a section whose name, quotes
+-- removed, starts with PATH or HOST in any case as special: it never loads
+-- extensions from one, and from the first such section to the end of the file
+-- no other setting reaches the global scope, even under a later ordinary
+-- header.
 local function special_section(line)
-    local header = line:lower():match("^%s*%[%s*(.-)%s*%]")
-    if header == nil then
+    local name = line:match("^%s*%[(.-)%]")
+    if name == nil then
         return nil
     end
 
-    return header:match("^path%s*=") ~= nil or header:match("^host%s*=") ~= nil
+    name = name:match("^%s*(.-)%s*$")
+    name = (name:match('^"(.*)"$') or name:match("^'(.*)'$") or name):lower()
+    return name:sub(1, 4) == "path" or name:sub(1, 4) == "host"
 end
 
 -- Copy the source install's settings, point extension_dir at this install,
 -- comment out any active extension this install does not have, and add the
--- defaults for bundled extensions the source never mentioned in its global
--- scope. Extension binaries are never copied: one built against another
--- install stays there.
+-- defaults for bundled extensions the source never loads. The managed
+-- extension_dir and the added defaults go before the first special section,
+-- the only part of the file PHP applies globally. Extension binaries are never
+-- copied: one built against another install stays there.
 local function carried_ini(previous, source_name, extension_dir, manifest)
     local lines = {}
     local mentioned = {}
@@ -283,7 +289,7 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
 
         if line:match("^%s*extension_dir%s*=") then
             table.insert(lines, managed_line)
-            has_extension_dir = has_extension_dir or not in_special
+            has_extension_dir = has_extension_dir or first_special == nil
         elseif extension ~= nil then
             if not in_special then
                 mentioned[extension.name] = true
