@@ -88,6 +88,7 @@ package_fixture 8.5.1 current
 package_fixture 8.5.1-1 shared demo_on:true demo_off:false demo_zend:false:zend
 package_fixture 8.5.2 shared demo_on:true demo_off:false demo_zend:false:zend demo_new:true
 package_fixture 8.5.2-1 shared demo_on:true
+package_fixture 8.5.3 shared demo_on:true demo_off:false demo_zend:false:zend demo_new:true demo_later:true
 ARCHIVE_NAME="php-8.4.99-cli-macos-aarch64.tar.gz"
 (
   cd "$ASSETS"
@@ -100,6 +101,7 @@ cat > "$ASSETS/releases.json" <<'JSON'
 [
   {"tag": "8.5.1-1"},
   {"tag": "8.5.2-1", "draft": true},
+  {"tag": "8.5.3"},
   {"tag": "8.5.2"},
   {"tag": "8.5.1"},
   {"tag": "8.4.99"},
@@ -148,8 +150,8 @@ if grep -E -- '-[0-9]+$' <<< "$AVAILABLE_VERSIONS"; then
   echo "A rebuild revision was listed instead of its plain version." >&2
   exit 1
 fi
-test "$(grep -c '^8\.5\.' <<< "$AVAILABLE_VERSIONS")" = 2
-test "$(mise latest php@8.5)" = "8.5.2"
+test "$(grep -c '^8\.5\.' <<< "$AVAILABLE_VERSIONS")" = 3
+test "$(mise latest php@8.5)" = "8.5.3"
 
 # A future branch appears in listings the moment the snapshot maintains it.
 if grep -Fx "9.0.1" <<< "$AVAILABLE_VERSIONS"; then
@@ -185,8 +187,9 @@ fi
 # extension off, and add extensions built there with PIE, by name, by absolute
 # path, with an upper-case directive, and by a relative path climbing into
 # 8.5.1 from any sibling's extension_dir. A value ending in "/" must not break
-# the carry-forward. The file ends with a special section, whose quoted name
-# holds a bracket, followed by an ordinary one that holds its only
+# the carry-forward. The file has no global extension_dir, a multi-line quoted
+# value with a bracketed line, and ends with a special section, whose quoted
+# name holds a bracket, followed by an ordinary one that holds its only
 # extension_dir, which PHP never applies globally.
 sed -i '' -e 's/^extension=demo_on$/;extension=demo_on/' -e '/^extension_dir = /d' \
   "$ROOT_851/bin/php.ini"
@@ -194,6 +197,7 @@ sed -i '' -e 's/^extension=demo_on$/;extension=demo_on/' -e '/^extension_dir = /
   printf 'memory_limit = 512M\nextension=userbuilt\nextension=%s\nextension=/opt/ext/\n' \
     "$ROOT_851/lib/php/extensions/abspath.so"
   printf 'EXTENSION=uppercase\nzend_extension=../../../../8.5.1/lib/php/extensions/userbuilt.so\n'
+  printf 'error_prepend_string = "\n[PHP error]\n"\n'
   printf '["PATH=/srv/app[1]"]\nmemory_limit = 64M\n[PHP]\nextension_dir = "/old/place"\n'
 } >> "$ROOT_851/bin/php.ini"
 : > "$ROOT_851/lib/php/extensions/userbuilt.so"
@@ -213,7 +217,10 @@ rm "$INSTALLS/8.5.99"
 ROOT_852="$INSTALLS/8.5.2"
 INI_852="$ROOT_852/bin/php.ini"
 grep -Fq '"release":"8.5.2"' "$ROOT_852/share/php-bin/manifest.json"
-test "$(sed -n 2p "$INI_852")" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
+first_setting() { grep -v -E '^[[:space:]]*(;|$)' "$1" | head -n 1; }
+test "$(first_setting "$INI_852")" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
+test "$(grep -n -Fx 'extension=demo_new' "$INI_852" | cut -d: -f1)" \
+  -lt "$(grep -n -Fx 'memory_limit = 512M' "$INI_852" | cut -d: -f1)"
 test "$(grep '^extension_dir' "$INI_852" | sort -u)" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
 grep -Fx 'memory_limit = 512M' "$INI_852"
 grep -Fx ';extension=demo_on' "$INI_852"
@@ -227,10 +234,10 @@ grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <p
   | grep -Fx ';EXTENSION=uppercase'
 grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_852" \
   | grep -Fx ';zend_extension=../../../../8.5.1/lib/php/extensions/userbuilt.so'
-# The new bundled default lands in the global scope, before the first section,
-# and the special section keeps its own settings.
-test "$(grep -n -Fx 'extension=demo_new' "$INI_852" | cut -d: -f1)" \
-  -lt "$(grep -n -Fx '["PATH=/srv/app[1]"]' "$INI_852" | cut -d: -f1)"
+# The new bundled default lands in the global scope, before any setting, so
+# neither the quoted value nor the special section can hold it, and both keep
+# their own lines.
+grep -A2 -Fx 'error_prepend_string = "' "$INI_852" | tail -n 2 | tr '\n' '|' | grep -Fx '[PHP error]|"|'
 grep -A1 -Fx '["PATH=/srv/app[1]"]' "$INI_852" | grep -Fx 'memory_limit = 64M'
 grep -Fx 'extension=demo_new' "$INI_852"
 if grep -Fx 'memory_limit = 1G' "$INI_852"; then
@@ -239,9 +246,22 @@ if grep -Fx 'memory_limit = 1G' "$INI_852"; then
 fi
 test ! -e "$ROOT_852/lib/php/extensions/userbuilt.so"
 
-# An explicit revision stays an exact pin.
+# An explicit revision stays an exact pin. It carries from 8.5.2, whose
+# leading managed extension_dir is rewritten in place, not added again.
 mise install php@8.5.1-1
 grep -Fq '"release":"8.5.1-1"' "$INSTALLS/8.5.1-1/share/php-bin/manifest.json"
+test "$(first_setting "$INSTALLS/8.5.1-1/bin/php.ini")" \
+  = "extension_dir = \"$INSTALLS/8.5.1-1/lib/php/extensions\""
+test "$(grep -c '^; Managed by mise-php' "$INSTALLS/8.5.1-1/bin/php.ini")" \
+  = "$(grep -c '^; Managed by mise-php' "$INI_852")"
+
+# 8.5.3 also carries from 8.5.2 and bundles one more default, which follows
+# the leading extension_dir instead of adding a second managed line.
+mise install php@8.5.3
+INI_853="$INSTALLS/8.5.3/bin/php.ini"
+test "$(first_setting "$INI_853")" = "extension_dir = \"$INSTALLS/8.5.3/lib/php/extensions\""
+test "$(grep -v -E '^[[:space:]]*(;|$)' "$INI_853" | sed -n 2p)" = "extension=demo_later"
+test "$(grep -c '^; Managed by mise-php' "$INI_853")" = "$(grep -c '^; Managed by mise-php' "$INI_852")"
 
 # The current layout still gets a php.ini, and another branch's settings never
 # carry over.

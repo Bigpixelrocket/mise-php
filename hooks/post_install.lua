@@ -246,37 +246,26 @@ local function fresh_ini(extension_dir, manifest)
     return table.concat(lines, "\n") .. "\n"
 end
 
--- A line whose first non-blank character is "[" opens an INI section.
-local function section_header(line)
-    return line:match("^%s*%[") ~= nil
-end
-
 -- Copy the source install's settings, point extension_dir at this install,
 -- comment out any active extension this install does not have, and add the
 -- defaults for bundled extensions the source never mentions. Extension
 -- binaries are never copied: one built against another install stays there.
 --
--- PHP applies every line before the first section header globally, whatever
--- the sections are called, while a [PATH=...] or [HOST=...] section holds
--- settings and extensions back. So the managed extension_dir and the added
--- defaults go before the first header, and section names are never
--- interpreted.
+-- New lines go before the first line that is neither blank nor a comment:
+-- everything before it is global and outside any value, whatever sections or
+-- multi-line quoted values follow, and PHP loads extensions in any line order.
+-- The managed extension_dir leads what is added, so when the file already
+-- starts with it, as every carried file does after its first upgrade, the new
+-- defaults simply follow that line and no second copy is added.
 local function carried_ini(previous, source_name, extension_dir, manifest)
     local lines = {}
     local mentioned = {}
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
-    local has_extension_dir = false
-    local first_section = nil
 
     for _, line in ipairs(split_lines(previous)) do
         local extension = parse_extension_line(line)
-        if first_section == nil and section_header(line) then
-            first_section = #lines + 1
-        end
-
         if line:match("^%s*extension_dir%s*=") then
             table.insert(lines, managed_line)
-            has_extension_dir = has_extension_dir or first_section == nil
         elseif extension ~= nil then
             mentioned[extension.name] = true
             if not extension.commented and not extension_available(extension.value, extension_dir) then
@@ -290,12 +279,19 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
         end
     end
 
-    if not has_extension_dir then
-        table.insert(lines, 1, managed_line)
-        table.insert(lines, 1, "; Managed by mise-php: rewritten to this install's own folder.")
-        if first_section ~= nil then
-            first_section = first_section + 2
+    local at = #lines + 1
+    for index, line in ipairs(lines) do
+        if not line:match("^%s*$") and not line:match("^%s*;") then
+            at = index
+            break
         end
+    end
+
+    local groups = {}
+    if lines[at] == managed_line then
+        at = at + 1
+    else
+        table.insert(groups, { "; Managed by mise-php: rewritten to this install's own folder.", managed_line })
     end
 
     local added = {}
@@ -307,15 +303,24 @@ local function carried_ini(previous, source_name, extension_dir, manifest)
         end
     end
     if #added > 0 then
-        local at = first_section or (#lines + 1)
         table.insert(added, 1, "; Bundled shared extensions not in the settings carried from " .. source_name)
-        table.insert(added, 1, "")
-        if first_section ~= nil then
-            table.insert(added, "")
+        table.insert(groups, added)
+    end
+
+    local block = {}
+    for _, group in ipairs(groups) do
+        if #block > 0 or (at > 1 and lines[at - 1] ~= "") then
+            table.insert(block, "")
         end
-        for offset, line in ipairs(added) do
-            table.insert(lines, at + offset - 1, line)
+        for _, line in ipairs(group) do
+            table.insert(block, line)
         end
+    end
+    if #block > 0 and at <= #lines then
+        table.insert(block, "")
+    end
+    for offset, line in ipairs(block) do
+        table.insert(lines, at + offset - 1, line)
     end
 
     return table.concat(lines, "\n") .. "\n"
