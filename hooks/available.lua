@@ -1,23 +1,37 @@
 local releases = require("releases")
 
+-- List each installable patch once, as its plain version, newest first. Rebuild
+-- revisions such as 8.5.10-1 fold into 8.5.10; PreInstall resolves a plain
+-- version to its newest revision. mise keeps this order instead of sorting, so
+-- the list must be numeric: GitHub's publish order would let a late rebuild of
+-- an old patch become the branch's newest version.
 function PLUGIN:Available(_)
-    local result = {}
+    local seen = {}
+    local versions = {}
 
     for _, release in ipairs(releases.list()) do
         local version = release.tag_name
-        local archive = version and releases.archive_name(version) or nil
-        local publishable = not release.draft and not release.prerelease
 
-        if publishable
-            and version ~= nil
+        if releases.is_installable(release)
             and releases.is_supported_version(version)
-            and releases.find_asset(release, archive) ~= nil
-            and releases.find_asset(release, "SHA256SUMS") ~= nil
+            and releases.parse_version(version) ~= nil
         then
-            table.insert(result, { version = version })
+            local plain = releases.plain_version(version)
+            if not seen[plain] then
+                seen[plain] = true
+                table.insert(versions, { plain = plain, key = releases.parse_version(plain) })
+            end
         end
+    end
+
+    table.sort(versions, function(a, b)
+        return releases.is_newer(a.key, b.key)
+    end)
+
+    local result = {}
+    for _, entry in ipairs(versions) do
+        table.insert(result, { version = entry.plain })
     end
 
     return result
 end
-
