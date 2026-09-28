@@ -81,6 +81,7 @@ package_fixture() {
 
 package_fixture 8.4.99 current
 package_fixture 8.1.99 current
+package_fixture 8.5.0 current
 package_fixture 9.0.1 current
 package_fixture 8.5.1 current
 package_fixture 8.5.1-1 shared demo_on:true demo_off:false demo_zend:false:zend
@@ -94,19 +95,25 @@ ARCHIVE_NAME="php-8.4.99-cli-macos-aarch64.tar.gz"
 )
 
 # API order is publish order, newest first: a rebuild of the older 8.5.1 was
-# published after 8.5.2, and the newest 8.5.2 revision is still a draft.
-cat > "$ASSETS/releases.json" <<'JSON'
-[
+# published after 8.5.2, and the newest 8.5.2 revision is still a draft. One
+# hundred releases of an unmaintained branch come first, so every maintained
+# release sits on the second page of the listing.
+{
+  printf '[\n'
+  for patch in {1..100}; do printf '  {"tag": "7.4.%s"},\n' "$patch"; done
+  cat <<'JSON'
   {"tag": "8.5.1-1"},
   {"tag": "8.5.2-1", "draft": true},
   {"tag": "8.5.3"},
   {"tag": "8.5.2"},
   {"tag": "8.5.1"},
+  {"tag": "8.5.0"},
   {"tag": "8.4.99"},
   {"tag": "8.1.99"},
   {"tag": "9.0.1"}
 ]
 JSON
+} > "$ASSETS/releases.json"
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 python3 "$PROJECT_ROOT/test/mock_server.py" "$PORT" "$ASSETS" \
@@ -130,7 +137,16 @@ use_mise_home() {
   export MISE_SYSTEM_CONFIG_FILE="$1/config/system.toml"
 }
 
+# A token is set throughout, and the mock server is not api.github.com, so no
+# request may carry it: not the API, and not an asset download.
 export MISE_PHP_API_BASE_URL="http://127.0.0.1:$PORT"
+export MISE_PHP_GITHUB_TOKEN="fixture-token-never-sent"
+export GITHUB_TOKEN="fixture-token-never-sent"
+REQUESTS="$ASSETS/requests.log"
+# Print the requests made since mark_requests last ran.
+mark_requests() { REQUEST_MARK="$({ wc -l < "$REQUESTS"; } 2>/dev/null || echo 0)"; }
+new_requests() { tail -n +"$((REQUEST_MARK + 1))" "$REQUESTS"; }
+mark_requests
 use_mise_home "$TEMP_DIR/mise"
 INSTALLS="$MISE_DATA_DIR/installs/php"
 
@@ -148,7 +164,10 @@ if grep -E -- '-[0-9]+$' <<< "$AVAILABLE_VERSIONS"; then
   echo "A rebuild revision was listed instead of its plain version." >&2
   exit 1
 fi
-test "$(grep -c '^8\.5\.' <<< "$AVAILABLE_VERSIONS")" = 3
+test "$(grep -c '^8\.5\.' <<< "$AVAILABLE_VERSIONS")" = 4
+# Every maintained release is on the second page, so listing it at all proves
+# the pages were followed; a full page is never the last one.
+new_requests | grep -F '/releases?per_page=100&page=2 '
 test "$(mise latest php@8.5)" = "8.5.3"
 
 # A future branch appears in listings the moment the snapshot maintains it.
@@ -164,8 +183,16 @@ printf '%s\n' "$ORIGINAL_POLICY" > "$PROJECT_ROOT/lib/policy.lua"
 grep -Fx "9.0.1" <<< "$FUTURE_VERSIONS"
 
 # A plain patch installs its newest published revision, and the new layout
-# gets a php.ini with its bundled extensions and a relocated build kit.
+# gets a php.ini with its bundled extensions and a relocated build kit. The
+# listing that resolved the revision already holds its release, so the install
+# reads no release by tag.
+mark_requests
 mise install php@8.5.1
+new_requests | grep -F '/assets/php-8.5.1-1-cli-macos-aarch64.tar.gz '
+if new_requests | grep -F '/releases/tags/'; then
+  echo "A plain-version install read its release again by tag." >&2
+  exit 1
+fi
 ROOT_851="$INSTALLS/8.5.1"
 grep -Fq '"release":"8.5.1-1"' "$ROOT_851/share/php-bin/manifest.json"
 grep -Fx "extension_dir = \"$ROOT_851/lib/php/extensions\"" "$ROOT_851/bin/php.ini"
@@ -244,9 +271,12 @@ if grep -Fx 'memory_limit = 1G' "$INI_852"; then
 fi
 test ! -e "$ROOT_852/lib/php/extensions/userbuilt.so"
 
-# An explicit revision stays an exact pin. It carries from 8.5.2, whose
-# leading managed extension_dir is rewritten in place, not added again.
+# An explicit revision stays an exact pin, read by its tag. It carries from
+# 8.5.2, whose leading managed extension_dir is rewritten in place, not added
+# again.
+mark_requests
 mise install php@8.5.1-1
+test "$(new_requests | grep -c -F '/releases/tags/8.5.1-1 ')" = 1
 grep -Fq '"release":"8.5.1-1"' "$INSTALLS/8.5.1-1/share/php-bin/manifest.json"
 test "$(first_setting "$INSTALLS/8.5.1-1/bin/php.ini")" \
   = "extension_dir = \"$INSTALLS/8.5.1-1/lib/php/extensions\""
@@ -275,6 +305,117 @@ fi
 # EOL releases are absent from branch discovery but remain installable exactly.
 mise install php@8.1.99
 test -x "$INSTALLS/8.1.99/bin/php"
+
+# php.ini carry-forward across layouts and PIE, in a home of its own so the
+# newest install of the branch is always the one each step names.
+use_mise_home "$TEMP_DIR/mise-carry"
+INSTALLS="$MISE_DATA_DIR/installs/php"
+mise plugin link php "$PROJECT_ROOT"
+count_lines() { grep -c -F -x "$1" "$2" || true; }
+
+# PIE adds its own line for an extension a commented line already names, here
+# the bundled demo_off, as it does for any commented line.
+mise install php@8.5.2
+{
+  printf '\n; PIE automatically added this to enable the demo/off extension\n'
+  printf '; priority=80\nextension=demo_off\n'
+} >> "$INSTALLS/8.5.2/bin/php.ini"
+
+# 8.5.0 has no manifest and compiles demo_new in. Its lines are turned off
+# with a note that says so, never a PIE rebuild note; demo_on and PIE's
+# demo_off are truly absent, so they get the PIE note.
+mise install php@8.5.0
+INI_850="$INSTALLS/8.5.0/bin/php.ini"
+grep -A1 -Fx '; built into this PHP binary, so it needs no extension line here' "$INI_850" \
+  | grep -Fx ';extension=demo_new'
+grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_850" \
+  | grep -Fx ';extension=demo_on'
+grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_850" \
+  | grep -Fx ';extension=demo_off'
+if grep -E '^(zend_)?extension=' "$INI_850"; then
+  echo "An extension line stayed active in an archive without shared extensions." >&2
+  exit 1
+fi
+
+# Carried back into a layout that bundles them, every line mise-php turned off
+# is active again. PIE's demo_off line wins, and the bundled demo_off line is
+# marked so removing its ";" cannot load the extension twice.
+mise uninstall php@8.5.2
+mise install php@8.5.3
+INI_853="$INSTALLS/8.5.3/bin/php.ini"
+for name in demo_on demo_new demo_off; do
+  test "$(count_lines "extension=$name" "$INI_853")" = 1
+done
+grep -A1 -Fx '; enabled by another line in this file: keep this one commented' "$INI_853" \
+  | grep -Fx ';extension=demo_off'
+if grep -F -e 'rebuild it with PIE' -e 'built into this PHP binary' "$INI_853"; then
+  echo "A note survived for an extension this install has." >&2
+  exit 1
+fi
+
+# The user removes the ";" anyway: the next install keeps one active line and
+# turns the second off. demo_new and demo_later are not in 8.5.1-1.
+sed -i '' 's/^;extension=demo_off$/extension=demo_off/' "$INI_853"
+test "$(count_lines 'extension=demo_off' "$INI_853")" = 2
+mise install php@8.5.1-1
+INI_8511="$INSTALLS/8.5.1-1/bin/php.ini"
+test "$(count_lines 'extension=demo_off' "$INI_8511")" = 1
+grep -A1 -Fx '; already enabled by another line in this file: PHP warns when it loads one twice' "$INI_8511" \
+  | grep -Fx ';extension=demo_off'
+grep -A1 -Fx '; not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_8511" \
+  | grep -Fx ';extension=demo_later'
+
+# pie install rebuilds demo_later for 8.5.1-1 and adds its own line. The next
+# install drops the line mise-php turned off, with the duplicate demo_off and
+# PIE's comments above it, instead of stacking notes on every upgrade.
+: > "$INSTALLS/8.5.1-1/lib/php/extensions/demo_later.so"
+{
+  printf '\n; PIE automatically added this to enable the demo/later extension\n'
+  printf '; priority=80\nextension=demo_later\n'
+} >> "$INI_8511"
+mise uninstall php@8.5.3
+mise install php@8.5.3
+for name in demo_later demo_off; do
+  test "$(grep -c -E "^;?extension=$name\$" "$INI_853")" = 1
+  test "$(count_lines "extension=$name" "$INI_853")" = 1
+done
+test "$(count_lines '; PIE automatically added this to enable the demo/later extension' "$INI_853")" = 1
+test "$(count_lines '; PIE automatically added this to enable the demo/off extension' "$INI_853")" = 0
+if grep -F 'enabled by another line in this file' "$INI_853"; then
+  echo "A note stayed above a line the user made active." >&2
+  exit 1
+fi
+if grep -F -e 'rebuild it with PIE' -e 'already enabled by another line' "$INI_853"; then
+  echo "A superseded note was carried forward." >&2
+  exit 1
+fi
+
+# A line that loads the extension from another install does not supersede one
+# mise-php turned off: that one loads in an install that bundles it, and the
+# other becomes the commented duplicate.
+OTHER_DEMO_NEW="extension=$INSTALLS/8.5.1-1/lib/php/extensions/demo_new.so"
+awk -v other="$OTHER_DEMO_NEW" '
+  $0 == "extension=demo_new" {
+    print "; not bundled with this build: rebuild it with PIE (pie install <package>)"
+    print ";extension=demo_new"
+    print other
+    next
+  }
+  { print }
+' "$INI_853" > "$INI_853.edited"
+mv "$INI_853.edited" "$INI_853"
+mise install php@8.5.2
+INI_852="$INSTALLS/8.5.2/bin/php.ini"
+test "$(count_lines 'extension=demo_new' "$INI_852")" = 1
+grep -A1 -Fx '; already enabled by another line in this file: PHP warns when it loads one twice' "$INI_852" \
+  | grep -Fx ";$OTHER_DEMO_NEW"
+
+# No request to the mock server carried the token.
+if grep -F 'auth=yes' "$REQUESTS"; then
+  echo "A request to a server other than api.github.com carried the GitHub token." >&2
+  exit 1
+fi
+grep -F 'auth=no' "$REQUESTS" > /dev/null
 
 printf '%064d  %s\n' 0 "$ARCHIVE_NAME" > "$ASSETS/SHA256SUMS"
 use_mise_home "$TEMP_DIR/mise-bad"

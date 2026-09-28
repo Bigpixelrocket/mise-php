@@ -4,27 +4,80 @@ local policy = require("policy")
 
 local M = {}
 
-local API_BASE_URL = os.getenv("MISE_PHP_API_BASE_URL") or "https://api.github.com"
+local GITHUB_API_URL = "https://api.github.com"
+local API_BASE_URL = (os.getenv("MISE_PHP_API_BASE_URL") or GITHUB_API_URL):gsub("/+$", "")
 local REPOSITORY_PATH = "/repos/bigpixelrocket/php-bin"
+local TOKEN_VARIABLES = { "MISE_PHP_GITHUB_TOKEN", "GITHUB_TOKEN" }
+local PAGE_SIZE = 100
+local MAX_PAGES = 100
 
-local function request(url, decode_json)
-    local response, err = http.get({
-        url = url,
-        headers = {
-            Accept = "application/vnd.github+json",
-            ["X-GitHub-Api-Version"] = "2022-11-28",
-        },
-    })
+-- The GitHub token for API calls and the variable it came from, or nil.
+-- MISE_PHP_GITHUB_TOKEN wins over GITHUB_TOKEN, and an empty value counts as
+-- unset. The token is sent only to api.github.com: a custom
+-- MISE_PHP_API_BASE_URL never receives it, and neither does any download, since
+-- release assets redirect to other hosts.
+local function api_token()
+    if API_BASE_URL ~= GITHUB_API_URL then
+        return nil, nil
+    end
+
+    for _, name in ipairs(TOKEN_VARIABLES) do
+        local value = (os.getenv(name) or ""):match("^%s*(.-)%s*$")
+        if value ~= "" then
+            return value, name
+        end
+    end
+
+    return nil, nil
+end
+
+-- Explain a refused API call. Anonymous GitHub API calls share a small hourly
+-- limit per address, which shared CI runners exhaust. Names the variable in
+-- use, never its value. Without either variable the request is not
+-- necessarily anonymous: mise adds its own GitHub token to api.github.com
+-- calls the plugin sends without one.
+local function refusal_message(status, token_variable)
+    local text = "php release server returned HTTP " .. tostring(status)
+    if token_variable ~= nil then
+        return text .. ": GitHub rate limited or refused the token from " .. token_variable
+    end
+
+    return text .. ": GitHub rate limited or refused this request, which carried no"
+        .. " MISE_PHP_GITHUB_TOKEN or GITHUB_TOKEN; set one to a GitHub token to raise the limit"
+end
+
+-- GET one URL. Only API metadata calls pass api = true, so only they may carry
+-- the token; downloads always go out anonymously.
+local function request(url, api)
+    local headers = {
+        Accept = "application/vnd.github+json",
+        ["X-GitHub-Api-Version"] = "2022-11-28",
+    }
+    local token_variable = nil
+    if api then
+        local token, variable = api_token()
+        if token ~= nil then
+            headers.Authorization = "Bearer " .. token
+            token_variable = variable
+        end
+    end
+
+    local response, err = http.get({ url = url, headers = headers })
 
     if err ~= nil then
         error("failed to fetch php release metadata: " .. tostring(err))
     end
 
-    if response.status_code ~= 200 then
-        error("php release server returned HTTP " .. tostring(response.status_code))
+    local status = response.status_code
+    if api and API_BASE_URL == GITHUB_API_URL and (status == 401 or status == 403 or status == 429) then
+        error(refusal_message(status, token_variable))
     end
 
-    if decode_json then
+    if status ~= 200 then
+        error("php release server returned HTTP " .. tostring(status))
+    end
+
+    if api then
         return json.decode(response.body)
     end
 
@@ -32,16 +85,39 @@ local function request(url, decode_json)
 end
 
 
+-- Every release, newest published first, read page by page until a short
+-- page: one page holds at most 100 releases.
 function M.list()
-    return request(API_BASE_URL .. REPOSITORY_PATH .. "/releases?per_page=100", true)
+    local releases = {}
+    for page = 1, MAX_PAGES do
+        local batch = request(
+            API_BASE_URL .. REPOSITORY_PATH .. "/releases?per_page=" .. PAGE_SIZE .. "&page=" .. page,
+            true
+        )
+        if type(batch) ~= "table" then
+            error("php release listing page " .. page .. " is not a list")
+        end
+
+        for _, release in ipairs(batch) do
+            table.insert(releases, release)
+        end
+
+        if #batch < PAGE_SIZE then
+            return releases
+        end
+    end
+
+    error("php release listing is longer than " .. MAX_PAGES .. " pages")
 end
 
 
+-- Read one release by its exact tag.
 function M.get(version)
     return request(API_BASE_URL .. REPOSITORY_PATH .. "/releases/tags/" .. version, true)
 end
 
 
+-- Download a release asset as text, always without the token.
 function M.download_text(url)
     return request(url, false)
 end
@@ -118,12 +194,14 @@ function M.is_installable(release)
 end
 
 
--- Resolve a plain patch version to its newest installable rebuild revision,
--- falling back to the plain tag when the listing holds no revision of it.
-function M.resolve_tag(version, listing)
-    local best_tag, best_key = nil, nil
+-- Resolve a plain patch version to its newest installable rebuild revision and
+-- return that tag with its release from the listing. With no installable match
+-- it returns the plain tag and nil, so the caller reads that release directly
+-- and reports what exactly is missing.
+function M.resolve_tag(version, releases)
+    local best_tag, best_key, best_release = nil, nil, nil
 
-    for _, release in ipairs(listing) do
+    for _, release in ipairs(releases) do
         local tag = release.tag_name
         local key = tag and M.parse_version(tag) or nil
         if key ~= nil
@@ -131,11 +209,11 @@ function M.resolve_tag(version, listing)
             and M.is_installable(release)
             and (best_key == nil or M.is_newer(key, best_key))
         then
-            best_tag, best_key = tag, key
+            best_tag, best_key, best_release = tag, key, release
         end
     end
 
-    return best_tag or version
+    return best_tag or version, best_release
 end
 
 

@@ -44,6 +44,7 @@ flowchart TD
   seal --> test["Clean macOS arm64 plugin tests"]
   test --> ready["Commit exact mise_ready record"]
   ready --> release["php-bin verifies both readiness records"]
+  compare -- "No, record missing" --> ready
 ```
 
 Only maintained branches appear in `mise ls-remote` or resolve from a branch
@@ -63,6 +64,27 @@ action key.
 
 There is no repair phase: a failed step stops the run and retains its log, and
 the next scheduled run captures the current policy and operator state again.
+
+A synchronization merges in two pull requests, the snapshot first and its
+readiness record second. A run that stops between them leaves the snapshot
+current and no record, and `php-bin` waits for that record. The next run's
+comparison notices: when the snapshot matches the policy, the policy carries a
+lifecycle action key, and `readiness/` holds no record for it, the trigger is
+`readiness_pending`. That run records readiness at the current `main` commit,
+which carries the synchronized snapshot, through the same `record-readiness`
+job and plugin checks, and closes any readiness pull request an earlier run
+left open, since only the run that opened one can merge it. A record that
+exists but names a different policy commit or digest fails the comparison
+instead. A paused operator leaves the record pending with a warning, and a
+pause that begins while the readiness checks run stops the merge and fails the
+run.
+
+A synchronization pull request that never merged, because its checks failed or
+its run stopped, leaves the snapshot out of date, so the next run synchronizes
+again. Each run pushes its synchronization to a branch of its own,
+`autorelease/<action>-<run id>`, and never rewrites an existing branch. It then
+closes the synchronization pull requests for the same action that earlier runs
+left open, and deletes their branches.
 
 ```mermaid
 flowchart TD

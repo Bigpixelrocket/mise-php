@@ -10,13 +10,16 @@ function PLUGIN:PreInstall(ctx)
     end
 
     -- A plain patch installs its newest published rebuild revision; an explicit
-    -- revision such as 8.5.10-1 stays an exact pin.
-    local tag = version
+    -- revision such as 8.5.10-1 stays an exact pin. Resolving a plain patch
+    -- reads the release listing, which already holds the chosen release, so
+    -- only an explicit pin, or a plain patch the listing cannot install, reads
+    -- its release by tag.
+    local tag, release = version, nil
     if releases.plain_version(version) == version then
-        tag = releases.resolve_tag(version, releases.list())
+        tag, release = releases.resolve_tag(version, releases.list())
     end
 
-    local release = releases.get(tag)
+    release = release or releases.get(tag)
     if release.draft or release.prerelease then
         error("php release is not published: " .. tag)
     end
