@@ -300,15 +300,36 @@ jobs:
           # malformed one, but this value reaches $GITHUB_OUTPUT and later shell
           # steps, so its alphabet is re-asserted at the boundary.
           [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
-          branch="autorelease/$(./scripts/consume-php-policy action-filename "$action_key" --suffix '')"
+          # Each run pushes to a branch of its own, so a pull request an earlier run
+          # opened on an older main never blocks this one. A rerun of this run reuses
+          # the branch: its validated commit is the same.
+          stem="autorelease/$(./scripts/consume-php-policy action-filename "$action_key" --suffix '')"
+          branch="$stem-${{ github.run_id }}"
+          title="chore: $action_key"
           gh auth setup-git
           git push origin "HEAD:refs/heads/$branch"
           number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -z "$number" ]]; then
-            url="$(gh pr create --base main --head "$branch" --title "chore: $action_key" \
+            url="$(gh pr create --base main --head "$branch" --title "$title" \
               --body "Deterministically sealed mise-php autorelease patch.\n\nValidated commit: \`$validated\`.")"
             number="${url##*/}"
           fi
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
+          # A synchronization pull request for this action that an earlier run left open
+          # can no longer merge, so close it and delete its branch. That covers the
+          # per-run branches and the single branch earlier versions of this job used.
+          gh pr list --state open --limit 100 --json number,headRefName,title,isCrossRepository \
+            | jq -r --arg title "$title" --arg stem "$stem" --argjson current "$number" '
+                .[]
+                | select(.isCrossRepository == false and .title == $title and .number != $current)
+                | select(.headRefName == $stem
+                    or ((.headRefName | startswith($stem + "-"))
+                      and (.headRefName | ltrimstr($stem + "-") | test("^[0-9]+$"))))
+                | .number' \
+            | while read -r stale; do
+                gh pr close "$stale" --delete-branch \
+                  --comment "Superseded by the synchronization from consumer run ${{ github.run_id }}."
+              done
           echo "number=$number" >> "$GITHUB_OUTPUT"
           echo "action_key=$action_key" >> "$GITHUB_OUTPUT"
       - name: Enforce checks and exact validated SHA
@@ -447,9 +468,9 @@ jobs:
           # A readiness pull request only merges from the run that opened it, so one
           # an earlier run left open can never merge; close it so this one is the
           # only candidate.
-          gh pr list --state open --limit 100 --json number,headRefName,title \
+          gh pr list --state open --limit 100 --json number,headRefName,title,isCrossRepository \
             | jq -r --arg title "$title" \
-              '.[] | select(.title == $title and (.headRefName | startswith("autorelease/readiness-"))) | .number' \
+              '.[] | select(.isCrossRepository == false and .title == $title and (.headRefName | startswith("autorelease/readiness-"))) | .number' \
             | while read -r stale; do
                 gh pr close "$stale" --delete-branch \
                   --comment "Superseded by the readiness record from consumer run ${{ github.run_id }}."
@@ -482,4 +503,15 @@ jobs:
           test "$(git rev-list --parents -n 1 "$actual")" = "$actual ${{ steps.readiness.outputs.base_sha }}"
           test "$(git diff --name-only "${{ steps.readiness.outputs.base_sha }}" "$actual")" = "${{ steps.readiness.outputs.record }}"
           test "sha256:$(git show "$actual:${{ steps.readiness.outputs.record }}" | shasum -a 256 | awk '{print $1}')" = "${{ steps.readiness.outputs.digest }}"
+          # The operator control was read when the run began, and the checks above can
+          # take minutes. Merging is a mutation, so a pause since then stops it here and
+          # leaves this pull request for the next enabled run to supersede.
+          operator_commit="$(gh api repos/Bigpixelrocket/php-bin/commits/main --jq .sha)"
+          [[ "$operator_commit" =~ ^[0-9a-f]{40}$ ]]
+          operator_state="$(gh api "repos/Bigpixelrocket/php-bin/contents/.github/autorelease-operator.json?ref=$operator_commit" \
+            --jq .content | base64 --decode | jq -r .unattendedMutation)"
+          if [[ "$operator_state" != "enabled" ]]; then
+            echo "Unattended mutation is $operator_state in php-bin at $operator_commit; the readiness record was not merged." >&2
+            exit 1
+          fi
           gh pr merge "${{ steps.readiness.outputs.number }}" --squash --delete-branch

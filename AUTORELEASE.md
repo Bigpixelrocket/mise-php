@@ -75,7 +75,16 @@ which carries the synchronized snapshot, through the same `record-readiness`
 job and plugin checks, and closes any readiness pull request an earlier run
 left open, since only the run that opened one can merge it. A record that
 exists but names a different policy commit or digest fails the comparison
-instead. A paused operator leaves the record pending with a warning.
+instead. A paused operator leaves the record pending with a warning, and a
+pause that begins while the readiness checks run stops the merge and fails the
+run.
+
+A synchronization pull request that never merged, because its checks failed or
+its run stopped, leaves the snapshot out of date, so the next run synchronizes
+again. Each run pushes its synchronization to a branch of its own,
+`autorelease/<action>-<run id>`, and never rewrites an existing branch. It then
+closes the synchronization pull requests for the same action that earlier runs
+left open, and deletes their branches.
 
 ```mermaid
 flowchart TD

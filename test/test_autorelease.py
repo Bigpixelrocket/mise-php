@@ -145,11 +145,32 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertIn("!cancelled()", record_job)
         self.assertIn('test "$(git rev-parse origin/main)" = "$READY_COMMIT"', record_job)
         self.assertIn('--mise-commit "$READY_COMMIT"', record_job)
-        self.assertIn("gh pr merge", record_job)
+        # A pause while the readiness checks ran stops the merge.
+        self.assertLess(
+            record_job.index("autorelease-operator.json"), record_job.index("gh pr merge")
+        )
+        self.assertIn('if [[ "$operator_state" != "enabled" ]]; then', record_job)
         # php-bin's system verifier finds the operator-bound merge gate by this job name.
         merge_job = workflow[workflow.index("  merge-and-record-readiness:"):workflow.index("  record-readiness:")]
         self.assertIn("phpBinOperatorCommit", merge_job)
         self.assertIn("operatorState", merge_job)
+
+    def test_consumer_never_rewrites_a_branch_and_supersedes_stale_pull_requests(self):
+        # A synchronization pull request that never merged leaves its branch on an older
+        # main. Each run pushes a branch of its own instead of rewriting that one, and
+        # closes what earlier runs left open, never a pull request from a fork.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        self.assertNotIn("--force", workflow)
+        self.assertNotIn("git push -f", workflow)
+        merge_job = workflow[workflow.index("  merge-and-record-readiness:"):workflow.index("  record-readiness:")]
+        self.assertIn('branch="$stem-${{ github.run_id }}"', merge_job)
+        self.assertIn('git push origin "HEAD:refs/heads/$branch"', merge_job)
+        self.assertLess(merge_job.index("gh pr create"), merge_job.index("gh pr close"))
+        record_job = workflow[workflow.index("  record-readiness:"):]
+        for job in (merge_job, record_job):
+            self.assertIn(".isCrossRepository == false", job)
+            self.assertIn(".title == $title", job)
 
     def test_readiness_requires_exact_commits_and_digests(self):
         result = readiness(
