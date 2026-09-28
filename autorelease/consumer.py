@@ -211,12 +211,60 @@ def fetch_policy_set(
     ]
 
 
+def pending_readiness(
+    action_key: str,
+    php_bin_commit: str,
+    policy_digest: str,
+    policy_invariants_digest: str,
+    readiness_dir: pathlib.Path,
+) -> bool:
+    """Report whether a synchronized lifecycle policy still lacks its readiness record.
+
+    A synchronization merges the snapshot first and records readiness afterwards, in a
+    separate pull request. A run that stops between the two leaves the snapshot current
+    and no record, so every later comparison would be quiet while php-bin waits for the
+    record without end. This is the check that notices: True means the record is
+    missing and the run must write it. A `bootstrap` policy needs no record. A record
+    that exists but names another policy fails the run, since php-bin would reject it.
+    """
+    if action_key == "bootstrap":
+        return False
+    path = readiness_dir / action_filename(action_key)
+    if not path.exists():
+        return True
+    record = load(path)
+    expected = {
+        "actionKey": action_key,
+        "state": "mise_ready",
+        "ready": True,
+        "phpBinPolicyCommit": php_bin_commit,
+        "policyDigest": policy_digest,
+        "policyInvariantsDigest": policy_invariants_digest,
+    }
+    mismatched = sorted(
+        key for key, value in expected.items() if not isinstance(record, dict) or record.get(key) != value
+    )
+    if mismatched:
+        raise ConsumerError(
+            f"readiness record {path.name} does not match the synchronized policy: {', '.join(mismatched)}"
+        )
+    return False
+
+
 def compare(
     policy: pathlib.Path,
     invariants: pathlib.Path,
     policy_commit: pathlib.Path,
     snapshot: pathlib.Path,
+    readiness_dir: pathlib.Path | None = None,
 ) -> dict[str, Any]:
+    """Compare the captured policy with the local snapshot and name the next step.
+
+    The trigger is `policy_changed` when the snapshot must be synchronized,
+    `readiness_pending` when the snapshot is current but its lifecycle action has no
+    readiness record in `readiness_dir`, and `quiet` otherwise. Without
+    `readiness_dir` the readiness record is not consulted.
+    """
     policy_digest = digest(policy.read_bytes())
     policy_document = load(policy)
     invariants_document = load(invariants)
@@ -305,6 +353,10 @@ def compare(
         or existing.get("maintainedBranches") != branches
     ):
         trigger = "policy_changed"
+    elif readiness_dir is not None and pending_readiness(
+        policy_action, commit_sha, policy_digest, invariants_digest, readiness_dir
+    ):
+        trigger = "readiness_pending"
     else:
         trigger = "quiet"
     return {
@@ -314,7 +366,7 @@ def compare(
         "policyDigest": policy_digest,
         "policyInvariantsDigest": invariants_digest,
         "phpBinPolicyCommit": commit_sha,
-        "synchronize": trigger != "quiet",
+        "synchronize": trigger == "policy_changed",
     }
 
 
@@ -488,6 +540,7 @@ def main() -> int:
     compare_parser.add_argument("--invariants", required=True, type=pathlib.Path)
     compare_parser.add_argument("--policy-commit", required=True, type=pathlib.Path)
     compare_parser.add_argument("--snapshot", required=True, type=pathlib.Path)
+    compare_parser.add_argument("--readiness-dir", type=pathlib.Path)
     compare_parser.add_argument("--output", required=True, type=pathlib.Path)
     ready = sub.add_parser("readiness")
     ready.add_argument("--action-key", required=True)
@@ -536,7 +589,9 @@ def main() -> int:
         elif args.command == "action-filename":
             print(action_filename(args.action_key, args.suffix))
         elif args.command == "compare":
-            result = compare(args.policy, args.invariants, args.policy_commit, args.snapshot)
+            result = compare(
+                args.policy, args.invariants, args.policy_commit, args.snapshot, args.readiness_dir
+            )
             write(args.output, result)
             print(json.dumps(result))
         else:

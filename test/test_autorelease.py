@@ -61,6 +61,96 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             }) + "\n")
             self.assertEqual("policy_changed", compare(policy, invariants, commit, snapshot)["trigger"])
 
+    def test_synchronized_policy_without_readiness_resumes_it(self):
+        # A run that merged the synchronization and stopped before its readiness
+        # record merged leaves the snapshot current: the comparison must still ask
+        # for the record, or php-bin waits for it without end.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            policy = root / "policy.json"
+            invariants = root / "invariants.json"
+            commit = root / "commit.json"
+            snapshot = root / "snapshot.json"
+            readiness_dir = root / "readiness"
+            readiness_dir.mkdir()
+            invariants.write_text('{"schemaVersion":1,"target":{"os":"macOS","minimumVersion":"26.0","architecture":"arm64","sapi":"cli"},"allowPrereleases":false,"historicalExactVersionsRemainInstallable":true,"immutablePublishedAssets":true}\n')
+            policy.write_text(json.dumps({
+                "schemaVersion": 1,
+                "policyInvariantsDigest": digest(invariants.read_bytes()),
+                "maintainedBranches": ["8.5", "8.6"],
+                "sourceEvidenceDigests": ["sha256:" + "f" * 64],
+                "actionKey": "new_branch:8.6",
+                "acceptedAt": "2026-11-20T00:00:00Z",
+            }) + "\n")
+            commit.write_text('{"sha":"' + "a" * 40 + '"}\n')
+            write(snapshot, {
+                "schemaVersion": 1,
+                "phpBinPolicyCommit": "a" * 40,
+                "policyDigest": digest(policy.read_bytes()),
+                "policyInvariantsDigest": digest(invariants.read_bytes()),
+                "maintainedBranches": ["8.5", "8.6"],
+                "generated": True,
+            })
+            result = compare(policy, invariants, commit, snapshot, readiness_dir)
+            self.assertEqual("readiness_pending", result["trigger"])
+            self.assertFalse(result["synchronize"])
+            # Callers that do not name the readiness folder keep the old verdict.
+            self.assertEqual("quiet", compare(policy, invariants, commit, snapshot)["trigger"])
+            # Planning a synchronization for it is refused: the snapshot is current.
+            with self.assertRaises(ConsumerError):
+                synchronization_plan(result, root / "unused.json", "d" * 40, "e" * 40, "enabled")
+
+            record = readiness(
+                "new_branch:8.6",
+                "a" * 40,
+                result["policyDigest"],
+                result["policyInvariantsDigest"],
+                "c" * 40,
+                ["sha256:" + "d" * 64],
+            )
+            write(readiness_dir / "new_branch-8.6.json", record)
+            self.assertEqual("quiet", compare(policy, invariants, commit, snapshot, readiness_dir)["trigger"])
+
+            # A record for the same action that names another policy fails loudly.
+            write(readiness_dir / "new_branch-8.6.json", {**record, "policyDigest": "sha256:" + "0" * 64})
+            with self.assertRaisesRegex(ConsumerError, "does not match the synchronized policy: policyDigest"):
+                compare(policy, invariants, commit, snapshot, readiness_dir)
+            write(readiness_dir / "new_branch-8.6.json", {**record, "ready": False})
+            with self.assertRaisesRegex(ConsumerError, "ready"):
+                compare(policy, invariants, commit, snapshot, readiness_dir)
+
+            # A policy change still synchronizes first, whatever the record says.
+            (readiness_dir / "new_branch-8.6.json").unlink()
+            commit.write_text('{"sha":"' + "b" * 40 + '"}\n')
+            self.assertEqual("policy_changed", compare(policy, invariants, commit, snapshot, readiness_dir)["trigger"])
+
+    def test_bootstrap_policy_needs_no_readiness_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertFalse(
+                consumer.pending_readiness(
+                    "bootstrap", "a" * 40, "sha256:" + "b" * 64, "sha256:" + "c" * 64, pathlib.Path(temporary)
+                )
+            )
+
+    def test_consumer_resumes_pending_readiness_through_one_record_job(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        self.assertIn("--readiness-dir readiness", workflow)
+        # Only a changed policy is planned; a pending record must not reach the plan.
+        self.assertIn("if: steps.compare.outputs.trigger == 'policy_changed' &&", workflow)
+        self.assertIn("if: steps.compare.outputs.trigger == 'readiness_pending'", workflow)
+        record_job = workflow[workflow.index("  record-readiness:"):]
+        self.assertIn("needs.compare.outputs.resume == 'true'", record_job)
+        self.assertIn("needs.merge-and-record-readiness.result == 'success'", record_job)
+        self.assertIn("!cancelled()", record_job)
+        self.assertIn('test "$(git rev-parse origin/main)" = "$READY_COMMIT"', record_job)
+        self.assertIn('--mise-commit "$READY_COMMIT"', record_job)
+        self.assertIn("gh pr merge", record_job)
+        # php-bin's system verifier finds the operator-bound merge gate by this job name.
+        merge_job = workflow[workflow.index("  merge-and-record-readiness:"):workflow.index("  record-readiness:")]
+        self.assertIn("phpBinOperatorCommit", merge_job)
+        self.assertIn("operatorState", merge_job)
+
     def test_readiness_requires_exact_commits_and_digests(self):
         result = readiness(
             "new_branch:8.6",

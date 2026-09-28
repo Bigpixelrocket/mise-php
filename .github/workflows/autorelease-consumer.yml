@@ -24,7 +24,8 @@ jobs:
     outputs:
       trigger: ${{ steps.compare.outputs.trigger }}
       synchronize: ${{ steps.plan.outputs.synchronize }}
-      base_sha: ${{ steps.plan.outputs.base_sha }}
+      resume: ${{ steps.resume.outputs.resume }}
+      base_sha: ${{ steps.plan.outputs.base_sha || steps.resume.outputs.base_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -88,13 +89,30 @@ jobs:
             --invariants autorelease-run/policy-invariants.json \
             --policy-commit autorelease-run/php-bin-main.json \
             --snapshot support-snapshot.json \
+            --readiness-dir readiness \
             --output autorelease-run/decision.json
           echo "trigger=$(jq -r .trigger autorelease-run/decision.json)" >> "$GITHUB_OUTPUT"
+      # A run that merged the synchronization but stopped before its readiness record
+      # merged leaves the snapshot current and no record, and php-bin waits for that
+      # record. The comparison reports readiness_pending, and this run records it at
+      # the current main commit, which carries the synchronized snapshot.
+      - name: Resume a readiness record an earlier run left unrecorded
+        id: resume
+        if: steps.compare.outputs.trigger == 'readiness_pending'
+        env:
+          OPERATOR_STATE: ${{ steps.operator.outputs.state }}
+        run: |
+          if [[ "$OPERATOR_STATE" != "enabled" ]]; then
+            echo "::warning::A readiness record is pending, and unattended mutation is paused in php-bin."
+            exit 0
+          fi
+          echo "resume=true" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       # Everything the synchronization may do is derived here from the captured policy:
       # its lifecycle action key, its exact preconditions, and its two generated paths.
       - name: Bind the synchronization to the exact captured policy
         id: plan
-        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
+        if: steps.compare.outputs.trigger == 'policy_changed' && steps.operator.outputs.state == 'enabled'
         env:
           OPERATOR_COMMIT: ${{ steps.operator.outputs.commit }}
           OPERATOR_STATE: ${{ steps.operator.outputs.state }}
@@ -210,7 +228,7 @@ jobs:
           export GIT_AUTHOR_DATE=2000-01-01T00:00:00Z
           export GIT_COMMITTER_DATE=2000-01-01T00:00:00Z
           git commit -m "chore: apply admitted autorelease patch"
-          jq -n --arg headSha "$(git rev-parse HEAD)" --arg tree "$(git rev-parse HEAD^{tree})" \
+          jq -n --arg headSha "$(git rev-parse HEAD)" --arg tree "$(git rev-parse 'HEAD^{tree}')" \
             '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
           git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -243,11 +261,15 @@ jobs:
         id: checks
         run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
+  # Merges the synchronization; record-readiness then records it. The job keeps its
+  # name because php-bin's system verifier finds the operator-bound merge gate by it.
   merge-and-record-readiness:
     needs: [compare, validate]
     if: needs.validate.outputs.passed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      commit: ${{ steps.merged.outputs.commit }}
     permissions:
       contents: write
       pull-requests: write
@@ -349,45 +371,101 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.patch.outputs.number }}
         run: gh pr merge "$PR_NUMBER" --squash --delete-branch
-      - name: Create readiness record at the merged synchronization commit
-        id: readiness
+      - name: Confirm the merged synchronization commit
+        id: merged
         env:
           GH_TOKEN: ${{ github.token }}
-          ACTION_KEY: ${{ steps.patch.outputs.action_key }}
           PR_NUMBER: ${{ steps.patch.outputs.number }}
         run: |
           merged="$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)"
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$merged"
           test "$(git rev-parse "$merged^{tree}")" = "$(jq -r .tree autorelease-run/validation.json)"
+          echo "commit=$merged" >> "$GITHUB_OUTPUT"
+
+  # Records readiness at the merged synchronization commit, or, when an earlier run
+  # stopped after its synchronization merged, at the current main commit the
+  # comparison found synchronized but unrecorded. Either way the record binds the
+  # exact policy the comparison captured, and its pull request must pass the plugin
+  # checks at that commit before it merges.
+  record-readiness:
+    needs: [compare, merge-and-record-readiness]
+    if: >-
+      !cancelled() && needs.compare.result == 'success' &&
+      (needs.merge-and-record-readiness.result == 'success' || needs.compare.outputs.resume == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+      actions: write
+      statuses: write
+    env:
+      READY_COMMIT: ${{ needs.merge-and-record-readiness.outputs.commit || needs.compare.outputs.base_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.READY_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: mise-autorelease-comparison-${{ github.run_id }}
+          path: autorelease-run
+      - name: Create readiness record at the synchronized commit
+        id: readiness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          action_key="$(jq -r .actionKey autorelease-run/decision.json)"
+          # The key comes from the captured policy, but it reaches $GITHUB_OUTPUT, a
+          # pull request title, and later shell steps, so its alphabet is re-asserted.
+          [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
+          [[ "$READY_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$READY_COMMIT"
           git checkout -B autorelease/readiness-${{ github.run_id }} origin/main
           base="$(git rev-parse HEAD)"
           mkdir -p readiness
-          filename="$(./scripts/consume-php-policy action-filename "$ACTION_KEY")"
+          filename="$(./scripts/consume-php-policy action-filename "$action_key")"
           mapfile -t digests < <(jq -r '.captures[].digest' autorelease-run/policy-capture.json)
           args=()
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done
           ./scripts/consume-php-policy readiness \
-            --action-key "$ACTION_KEY" \
-            --php-bin-commit "$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/synchronization-plan.json)" \
-            --policy-digest "$(jq -r .preconditions.supportPolicyDigest autorelease-run/synchronization-plan.json)" \
-            --policy-invariants-digest "$(jq -r .preconditions.policyInvariantsDigest autorelease-run/synchronization-plan.json)" \
-            --mise-commit "$merged" \
+            --action-key "$action_key" \
+            --php-bin-commit "$(jq -r .phpBinPolicyCommit autorelease-run/decision.json)" \
+            --policy-digest "$(jq -r .policyDigest autorelease-run/decision.json)" \
+            --policy-invariants-digest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
+            --mise-commit "$READY_COMMIT" \
             "${args[@]}" \
             --output "readiness/$filename"
           git add "readiness/$filename"
           git -c user.name=autorelease-readiness -c user.email=autorelease@invalid \
-            commit -m "chore: record $ACTION_KEY readiness"
+            commit -m "chore: record $action_key readiness"
+          title="chore: record $action_key readiness"
+          # A readiness pull request only merges from the run that opened it, so one
+          # an earlier run left open can never merge; close it so this one is the
+          # only candidate.
+          gh pr list --state open --limit 100 --json number,headRefName,title \
+            | jq -r --arg title "$title" \
+              '.[] | select(.title == $title and (.headRefName | startswith("autorelease/readiness-"))) | .number' \
+            | while read -r stale; do
+                gh pr close "$stale" --delete-branch \
+                  --comment "Superseded by the readiness record from consumer run ${{ github.run_id }}."
+              done
           gh auth setup-git
           git push origin HEAD
           url="$(gh pr create --base main --head "autorelease/readiness-${{ github.run_id }}" \
-            --title "chore: record $ACTION_KEY readiness" \
-            --body "Deterministic readiness record for the exact merged synchronization commit.")"
-          echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$base" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "record=readiness/$filename" >> "$GITHUB_OUTPUT"
-          echo "digest=sha256:$(shasum -a 256 "readiness/$filename" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            --title "$title" \
+            --body "Deterministic readiness record for the exact synchronized mise-php commit.")"
+          {
+            echo "number=${url##*/}"
+            echo "base_sha=$base"
+            echo "head_sha=$(git rev-parse HEAD)"
+            echo "record=readiness/$filename"
+            echo "digest=sha256:$(shasum -a 256 "readiness/$filename" | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
       - name: Validate and merge readiness record
         env:
           GH_TOKEN: ${{ github.token }}
