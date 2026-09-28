@@ -62,7 +62,7 @@ GitHub Actions failure email alone, until `php-bin` records it against the
 action key.
 
 There is no repair phase: a failed step stops the run and retains its log, and
-the next scheduled run starts again from the same captured state.
+the next scheduled run captures the current policy and operator state again.
 
 ```mermaid
 flowchart TD
