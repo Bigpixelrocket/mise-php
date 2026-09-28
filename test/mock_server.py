@@ -4,13 +4,18 @@
 releases.json in the asset folder lists the releases in API order, newest
 published first, as [{"tag": "8.4.99", "draft": false}, ...]. Every archive is
 served as php-<tag>-cli-macos-aarch64.tar.gz beside one shared SHA256SUMS.
+
+The release listing pages like GitHub's: per_page (default 30, at most 100)
+and page (default 1). Every request is appended to requests.log in the asset
+folder as "<path and query> auth=<yes|no>", so tests can count API calls and prove where
+an Authorization header went without the server ever recording its value.
 """
 
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 PORT = int(sys.argv[1])
@@ -48,14 +53,23 @@ def release_payload(release: dict) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        url = urlparse(self.path)
+        path = url.path
+        if path != "/health":
+            auth = "yes" if self.headers.get("Authorization") else "no"
+            with (ASSET_DIR / "requests.log").open("a") as log:
+                log.write(f"{self.path} auth={auth}\n")
 
         if path == "/health":
             self.send_bytes(b"ok\n", "text/plain")
             return
 
         if path == RELEASES_PATH:
-            self.send_json([release_payload(release) for release in releases()])
+            query = parse_qs(url.query)
+            per_page = min(int(query.get("per_page", ["30"])[0]), 100)
+            page = int(query.get("page", ["1"])[0])
+            listed = releases()[(page - 1) * per_page : page * per_page]
+            self.send_json([release_payload(release) for release in listed])
             return
 
         tag_prefix = f"{RELEASES_PATH}/tags/"

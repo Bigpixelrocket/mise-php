@@ -76,6 +76,28 @@ exact build, name the revision:
 php = "8.4.5-1"
 ```
 
+### GitHub API token
+
+The plugin reads release metadata from the GitHub API. Anonymous API calls
+share a small hourly limit per network address, which shared CI runners use up
+quickly; the plugin then fails with HTTP 403 and names the variables below.
+Set a token to use your account's much larger limit:
+
+```bash
+export MISE_PHP_GITHUB_TOKEN="$(gh auth token)"
+```
+
+- `MISE_PHP_GITHUB_TOKEN` is used first, then `GITHUB_TOKEN`, so the token a
+  GitHub Actions job already provides works unchanged. An empty value counts as
+  unset.
+- The token needs no scopes: `php-bin` releases are public. A read-only token
+  is enough.
+- The plugin sends it only as `Authorization: Bearer` to
+  `https://api.github.com`: never with a download, including the release assets
+  GitHub redirects to other hosts, and never to a custom
+  `MISE_PHP_API_BASE_URL`.
+- The plugin never prints or logs it.
+
 Mise also reads the plugin from a repository declaration:
 
 ```toml
@@ -110,6 +132,8 @@ extension=redis
 
 Releases built before shared extensions compile every module into `bin/php`
 and have no extension lines; their `php.ini` still holds your settings.
+Keep one active line per extension: PHP warns `Module already loaded` when it
+loads the same extension twice.
 
 Installing a new patch of a branch you already have copies `php.ini` from your
 newest install of that branch, so your settings and extension choices follow
@@ -118,6 +142,18 @@ install. Extensions bundled with the new install that the old file never
 mentioned get their default lines. `mise install -f` of a version you already
 have starts from your newest *other* install of that branch, so edits made only
 in the reinstalled version are replaced.
+
+The copy keeps exactly one active line per extension, and marks every line it
+changes with a comment directly above it:
+
+- An extension the new install lacks is commented out. If the new `bin/php`
+  has that module built in, which is the case for releases built before shared
+  extensions, the note says so; otherwise it says to rebuild it with PIE.
+- A line commented out that way becomes active again in a later install that
+  has the extension.
+- A second active line for the same extension is commented out.
+- A commented line for an extension another line enables is marked
+  `keep this one commented`.
 
 ### Building your own extensions
 
@@ -131,9 +167,19 @@ php pie.phar install apcu/apcu
 ```
 
 PIE builds the extension into that install's `lib/php/extensions` and adds its
-line to that install's `php.ini`. Extensions you build are never copied to
-another install: after a patch upgrade their lines are commented out with a
-note, and `pie install` builds them again for the new install.
+line to the end of that install's `php.ini`. Extensions you build are never
+copied to another install: after a patch upgrade their lines are commented out
+with a note, and `pie install` builds them again for the new install.
+
+PIE ignores commented lines, so it adds a line of its own even when `php.ini`
+already has a commented line for that extension. Two ways keep this clean:
+
+- For an extension bundled with the install, remove the `;` from its line
+  instead of running PIE. PIE would replace the bundled build with its own.
+- After `pie install` rebuilds an extension an upgrade commented out, leave the
+  old commented line alone: PIE's new line is the one that loads it. The next
+  patch install drops the old line mise-php commented out, and marks any other
+  commented line for it `keep this one commented`.
 
 ## Artifact verification
 
@@ -163,10 +209,11 @@ mise ls-remote php
 scripts/test.sh
 ```
 
-The test suite serves local fixture releases and verifies version listing and
-ordering, rebuild-revision resolution, checksum-backed installation, `php.ini`
-creation and carry-forward, build-kit relocation, and `PATH` activation through
-mise.
+The test suite serves local fixture releases and verifies paginated version
+listing and ordering, rebuild-revision resolution, checksum-backed
+installation, that no token reaches a server other than `api.github.com`,
+`php.ini` creation and carry-forward across archive layouts and PIE-added
+lines, build-kit relocation, and `PATH` activation through mise.
 
 ## Contributing and security
 

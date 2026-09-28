@@ -27,7 +27,10 @@ jobs:
       - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
       - name: Link plugin
         run: mise plugin link php "$GITHUB_WORKSPACE"
+      # Anonymous GitHub API calls from shared runners hit the rate limit.
       - name: Install published release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: mise install "php@${{ inputs.version }}"
       - name: Smoke test PHP
         run: |

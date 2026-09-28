@@ -9,7 +9,22 @@ local releases = require("releases")
 -- mise delete the install.
 
 local MARKER = "@PHP_BIN_PREFIX@"
+
+-- Notes mise-php writes directly above an extension line it had to comment
+-- out. The next carry-forward recognises each note by its exact text, so the
+-- wording of a published note never changes: installs in the field hold it.
 local MISSING_NOTE = "; not bundled with this build: rebuild it with PIE (pie install <package>)"
+local BUILTIN_NOTE = "; built into this PHP binary, so it needs no extension line here"
+local DUPLICATE_NOTE = "; already enabled by another line in this file: PHP warns when it loads one twice"
+-- Written above a commented line whose extension another line already enables.
+local SHADOW_NOTE = "; enabled by another line in this file: keep this one commented"
+
+-- Notes that mean "this line was active until mise-php turned it off".
+local OFF_NOTES = {
+    [MISSING_NOTE] = true,
+    [BUILTIN_NOTE] = true,
+    [DUPLICATE_NOTE] = true,
+}
 
 local HEADER = [[
 ; php.ini for this PHP install, written by mise-php.
@@ -22,6 +37,8 @@ local HEADER = [[
 ; Turn a bundled extension on or off by removing or adding the leading ";" on
 ; its line below. Build other extensions with PIE, for example:
 ;   pie install apcu/apcu
+; PIE adds its own extension line. Keep only one line per extension active:
+; PHP warns when it loads an extension twice.
 ]]
 
 local COMMON_SETTINGS = [[
@@ -182,6 +199,28 @@ local function extension_available(value, extension_dir)
         or file_exists(extension_dir .. "/" .. value .. ".so")
 end
 
+-- The modules compiled into this install's php, lower-cased, or an empty set
+-- when php cannot report them. Archives without a manifest compile in every
+-- module, so an extension that is shared elsewhere can be built in here.
+local function builtin_modules(root)
+    local modules = {}
+    local ok, output = pcall(cmd.exec, shell_quote(root .. "/bin/php") .. " -n -m")
+    if not ok or type(output) ~= "string" then
+        return modules
+    end
+
+    for line in output:gmatch("[^\r\n]+") do
+        local name = line:match("^%s*(.-)%s*$"):lower()
+        if name ~= "" and name:sub(1, 1) ~= "[" then
+            modules[name] = true
+            -- php -m names the OPcache module "Zend OPcache".
+            modules[(name:gsub("^zend ", ""))] = true
+        end
+    end
+
+    return modules
+end
+
 -- Find the newest other install of the same PHP branch that has a php.ini.
 -- mise alias links such as 8, 8.5 and latest are skipped: find -type d does
 -- not follow symbolic links.
@@ -246,9 +285,88 @@ local function fresh_ini(extension_dir, manifest)
     return table.concat(lines, "\n") .. "\n"
 end
 
+-- PIE writes these two comments above each extension line it adds.
+local function is_pie_comment(line)
+    return line ~= nil
+        and (line:match("^; PIE automatically added this to enable the .* extension$") ~= nil
+            or line:match("^; priority=%-?%d+$") ~= nil)
+end
+
+-- Split the source php.ini into items. A note mise-php wrote together with the
+-- commented extension line below it forms one item, so its state can be
+-- decided again for the new install instead of stacking notes on every
+-- upgrade. A note above a line the user has since made active is dropped.
+local function parse_items(previous)
+    local lines = split_lines(previous)
+    local items = {}
+    local index = 1
+    while index <= #lines do
+        local line = lines[index]
+        local note = line:match("^%s*(.-)%s*$")
+        local is_note = OFF_NOTES[note] or note == SHADOW_NOTE
+        local next_extension = lines[index + 1] and parse_extension_line(lines[index + 1])
+        if is_note and next_extension ~= nil and not next_extension.commented then
+            index = index + 1
+        elseif is_note and next_extension ~= nil then
+            table.insert(items, {
+                line = lines[index + 1],
+                extension = next_extension,
+                off = OFF_NOTES[note] ~= nil,
+            })
+            index = index + 2
+        else
+            table.insert(items, { line = line, extension = parse_extension_line(line) })
+            index = index + 1
+        end
+    end
+
+    return items
+end
+
+-- The line text without mise-php's leading ";", as the user last had it active.
+local function restored_line(line)
+    return (line:match("^%s*(.-)%s*$"):gsub("^;%s*", "", 1))
+end
+
+-- Drop an item mise-php turned off once another line enables the same
+-- extension, with the comments PIE wrote above it and the blank line before
+-- them. That happens after pie install rebuilds an extension an upgrade had
+-- commented out: PIE never sees commented lines and adds a line of its own.
+local function drop_superseded(items)
+    local enabled = {}
+    for _, item in ipairs(items) do
+        if item.extension ~= nil and not item.extension.commented and not item.off then
+            enabled[item.extension.name] = true
+        end
+    end
+
+    local kept = {}
+    for _, item in ipairs(items) do
+        if item.off and enabled[item.extension.name] then
+            local pie_comments = false
+            while is_pie_comment(kept[#kept] and kept[#kept].line) do
+                table.remove(kept)
+                pie_comments = true
+            end
+            if pie_comments and kept[#kept] ~= nil and kept[#kept].line:match("^%s*$") then
+                table.remove(kept)
+            end
+        else
+            table.insert(kept, item)
+        end
+    end
+
+    return kept
+end
+
 -- Copy the source install's settings, point extension_dir at this install,
--- comment out any active extension this install does not have, and add the
--- defaults for bundled extensions the source never mentions. Extension
+-- and keep exactly one active line per extension. A line whose extension this
+-- install lacks is commented out with a note: built in, or rebuild it with
+-- PIE. A line mise-php turned off earlier is active again once this install
+-- has its extension. A second active line for an extension is commented out,
+-- and a commented line for an extension another line enables is marked, so
+-- removing its ";" does not make PHP load the extension twice. Bundled
+-- extensions the source never mentions get their default lines. Extension
 -- binaries are never copied: one built against another install stays there.
 --
 -- New lines go before the first line that is neither blank nor a comment:
@@ -257,25 +375,66 @@ end
 -- The managed extension_dir leads what is added, so when the file already
 -- starts with it, as every carried file does after its first upgrade, the new
 -- defaults simply follow that line and no second copy is added.
-local function carried_ini(previous, source_name, extension_dir, manifest)
-    local lines = {}
-    local mentioned = {}
+local function carried_ini(previous, source_name, root, extension_dir, manifest)
+    local items = drop_superseded(parse_items(previous))
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
+    local mentioned = {}
+    local builtin = nil
 
-    for _, line in ipairs(split_lines(previous)) do
-        local extension = parse_extension_line(line)
-        if line:match("^%s*extension_dir%s*=") then
-            table.insert(lines, managed_line)
-        elseif extension ~= nil then
+    -- Pick one winner per extension among the lines meant to be active: the
+    -- first one this install can load, else the first one.
+    local winners = {}
+    for index, item in ipairs(items) do
+        local extension = item.extension
+        if extension ~= nil then
             mentioned[extension.name] = true
-            if not extension.commented and not extension_available(extension.value, extension_dir) then
-                table.insert(lines, MISSING_NOTE)
-                table.insert(lines, ";" .. line:match("^%s*(.-)%s*$"))
-            else
-                table.insert(lines, line)
+            local restored = item.off and parse_extension_line(restored_line(item.line))
+            if restored then
+                item.line = restored_line(item.line)
+                item.extension = restored
+                extension = restored
             end
+            if not extension.commented then
+                local available = extension_available(extension.value, extension_dir)
+                local winner = winners[extension.name]
+                if winner == nil or (available and not winner.available) then
+                    winners[extension.name] = { index = index, available = available }
+                end
+            end
+        end
+    end
+
+    local lines = {}
+    for index, item in ipairs(items) do
+        local extension = item.extension
+        local text = item.line:match("^%s*(.-)%s*$")
+        if extension == nil then
+            if item.line:match("^%s*extension_dir%s*=") then
+                table.insert(lines, managed_line)
+            else
+                table.insert(lines, item.line)
+            end
+        elseif extension.commented then
+            local winner = winners[extension.name]
+            if winner ~= nil and winner.available then
+                table.insert(lines, SHADOW_NOTE)
+            end
+            table.insert(lines, item.line)
         else
-            table.insert(lines, line)
+            local winner = winners[extension.name]
+            if winner.index == index and winner.available then
+                table.insert(lines, item.line)
+            else
+                builtin = builtin or builtin_modules(root)
+                if winner.index ~= index and (winner.available or builtin[extension.name]) then
+                    table.insert(lines, DUPLICATE_NOTE)
+                elseif builtin[extension.name] then
+                    table.insert(lines, BUILTIN_NOTE)
+                else
+                    table.insert(lines, MISSING_NOTE)
+                end
+                table.insert(lines, ";" .. text)
+            end
         end
     end
 
@@ -358,7 +517,7 @@ function PLUGIN:PostInstall(ctx)
     if source ~= nil then
         local previous = read_file(source.dir .. "/bin/php.ini")
         if previous ~= nil then
-            ini = carried_ini(previous, source.name, extension_dir, manifest)
+            ini = carried_ini(previous, source.name, root, extension_dir, manifest)
             print("php.ini settings carried forward from PHP " .. source.name)
         end
     end
