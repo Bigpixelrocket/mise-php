@@ -1,4 +1,5 @@
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -6,7 +7,7 @@ import json
 from unittest import mock
 
 from autorelease import admission, consumer
-from autorelease.admission import AdmissionError, admit, digest_file, protected, seal, verify_merge
+from autorelease.admission import AdmissionError, digest_file, protected, seal, verify_merge
 from autorelease.consumer import (
     CaptureAbsent,
     ConsumerError,
@@ -15,6 +16,9 @@ from autorelease.consumer import (
     fetch_first_url,
     pinned_policy_urls,
     readiness,
+    render_snapshot,
+    synchronization_plan,
+    synchronize,
     write,
 )
 
@@ -126,10 +130,9 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertNotIn("tr ':/'", workflow)
 
     def test_protected_controls_are_not_admissible(self):
-        self.assertTrue(protected(".github/codex-action-contract.json"))
         self.assertTrue(protected(".github/workflows/autorelease-consumer.yml"))
         self.assertTrue(protected("autorelease/admission.py"))
-        self.assertTrue(protected("scripts/validate-codex-action-inputs"))
+        self.assertTrue(protected("autorelease/consumer.py"))
         self.assertTrue(protected("autorelease-events/new-patch.json"))
         self.assertTrue(protected("readiness/new-branch.json"))
         self.assertFalse(protected("lib/releases.lua"))
@@ -170,7 +173,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         )
         for path in paths:
             self.assertTrue((root / path).is_file(), path)
-            # A shared file an agent may rewrite would fail the gate on the next
+            # A shared file automation may rewrite would fail the gate on the next
             # run, so every listed path needs owner review of its own.
             self.assertTrue(protected(path), path)
         self.assertTrue(protected("autorelease/shared-files.json"))
@@ -189,53 +192,18 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         for benign in ("task-" + "a" * 24, "github_pat_x", "flask-login"):
             self.assertIsNone(admission.SECRET_RE.search(benign), benign)
 
-    def test_investigation_defers_required_checks_to_writable_jobs(self):
+    def test_consumer_runs_no_model_and_no_repair(self):
         root = pathlib.Path(__file__).resolve().parents[1]
-        instructions = (root / ".github/codex/autorelease/investigation.md").read_text()
-        consumer = (root / ".github/workflows/autorelease-consumer.yml").read_text()
-        self.assertIn("Treat `requiredChecks` as downstream exact-head gates", instructions)
-        self.assertIn("do not run them in this read-only", instructions)
-        self.assertIn("not-yet-run status as unresolved", instructions)
-        self.assertIn(
-            'nonGoals:["upstream_php_classification","repository_mutation",'
-            '"required_check_execution","irreversible_github_effect"]',
-            consumer,
-        )
-
-    def test_agent_task_criteria_come_from_one_table(self):
-        # Criteria used to be authored as jq literals in three workflow steps, so the
-        # only way to check them was matching workflow source text. They now come from
-        # one script and the emitted JSON is what the agent actually receives.
-        script = str(pathlib.Path(__file__).resolve().parents[1] / "scripts/prepare-agent-task")
-        expected = {
-            "investigation": [
-                "phase-goal-correct",
-                "policy-difference-explained",
-                "authority-explicit",
-                "no-unresolved-work",
-            ],
-            "implementation": [
-                "phase-goal-correct",
-                "admitted-diff-complete",
-                "advisory-checks-recorded",
-                "no-unresolved-work",
-            ],
-            "repair": [
-                "phase-goal-correct",
-                "failure-cause-removed",
-                "advisory-checks-recorded",
-                "no-unresolved-work",
-            ],
-        }
-        for phase, ids in expected.items():
-            emitted = json.loads(
-                subprocess.run([script, "--phase", phase], capture_output=True, check=True).stdout
-            )
-            self.assertEqual(ids, [criterion["id"] for criterion in emitted], phase)
-            for criterion in emitted:
-                self.assertEqual(["id", "requirement", "evidenceRequired"], list(criterion), phase)
-                self.assertTrue(all(criterion.values()), phase)
-        self.assertNotEqual(0, subprocess.run([script, "--phase", "audit"], capture_output=True).returncode)
+        for path in (root / ".github/workflows").glob("*.yml"):
+            text = path.read_text().lower()
+            self.assertNotIn("openai", text, path.name)
+            self.assertNotIn("codex", text, path.name)
+        consumer_workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        self.assertNotIn("repair", consumer_workflow.replace("There is no repair phase", ""))
+        for command in ("consume-php-policy plan", "consume-php-policy synchronize", "./scripts/generate-policy-lua"):
+            self.assertIn(command, consumer_workflow)
+        for leftover in (".codex", ".github/codex", ".github/codex-action-contract.json", "schemas"):
+            self.assertFalse((root / leftover).exists(), leftover)
 
     def test_assert_admission_checks_covers_the_plugin_contract_bucket(self):
         # The consumer merge gates only ever pass --check-name, so this repository's
@@ -383,109 +351,125 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             self.assertEqual(1, rejected.returncode)
             self.assertIn("mise autorelease admission rejected", rejected.stderr)
 
-    # Returns an admissible plan plus the remaining admit() arguments by keyword, so
-    # a test can vary one part of the plan without rebuilding the policy capture.
-    def admission_fixture(self, root):
-        shared = root / "shared.md"
-        phase = root / "phase.md"
-        event = root / "event.json"
-        shared.write_text("shared\n")
-        phase.write_text("phase\n")
+    # Writes a complete policy capture in the layout `consume-php-policy fetch` leaves
+    # and returns its manifest path and the decision `compare` would write for it.
+    def capture_fixture(self, root, branches=("8.5", "8.6"), action_key="new_branch:8.6"):
         commit_sha = "a" * 40
-        policy_digest = "sha256:" + "b" * 64
-        invariants_digest = "sha256:" + "c" * 64
-        preconditions = {
-            "misePhpHead": "d" * 40,
-            "phpBinPolicyCommit": commit_sha,
-            "supportPolicyDigest": policy_digest,
-            "policyInvariantsDigest": invariants_digest,
-            "phpBinOperatorCommit": "e" * 40,
-            "operatorState": "enabled",
+        invariants = root / "policy-invariants.json"
+        invariants.write_text('{"schemaVersion":1}\n')
+        policy = root / "support-policy.json"
+        policy.write_text(json.dumps({"maintainedBranches": list(branches), "actionKey": action_key}) + "\n")
+        bodies = {
+            "php_bin_policy_selector": (root / "php-bin-main-selector.json", [{"sha": commit_sha}]),
+            "php_bin_state": (root / "php-bin-main.json", {"sha": commit_sha}),
         }
-        contract = {
-            "contractVersion": 1,
-            "actionKey": "new_branch:8.6",
-            "preconditions": preconditions,
-            "completionCriteria": [{"id": "done"}],
-        }
-        event.write_text(json.dumps(contract) + "\n")
-        captures = [
-            ("php_bin_policy_selector", [{"sha": commit_sha}], "/0/sha"),
-            ("php_bin_state", {"sha": commit_sha}, "/sha"),
-            ("support_policy", {"maintainedBranches": ["8.6"]}, "/maintainedBranches"),
-            ("policy_invariants", {"target": {"os": "macOS"}}, "/target"),
-        ]
-        manifest_records = []
-        evidence = []
-        for capture_id, body, pointer in captures:
-            path = root / f"{capture_id}.json"
+        records = []
+        for capture_id, (path, body) in bodies.items():
             path.write_text(json.dumps(body) + "\n")
-            body_digest = digest(path.read_bytes())
-            if capture_id == "support_policy":
-                policy_digest = body_digest
-                preconditions["supportPolicyDigest"] = body_digest
-            elif capture_id == "policy_invariants":
-                invariants_digest = body_digest
-                preconditions["policyInvariantsDigest"] = body_digest
-            manifest_records.append({"captureId": capture_id, "bodyPath": path.name, "digest": body_digest})
-            evidence.append({"captureId": capture_id, "digest": body_digest, "locator": {"kind": "json_pointer", "value": pointer}})
-        event.write_text(json.dumps(contract) + "\n")
-        manifest = root / "capture.json"
-        manifest.write_text(json.dumps({"schemaVersion": 1, "captures": manifest_records}) + "\n")
-        digests = {
-            "shared": digest_file(shared),
-            "phaseTemplate": digest_file(phase),
-            "eventContract": digest_file(event),
-        }
-        plan = {
+            records.append({"captureId": capture_id, "bodyPath": path.name, "digest": digest_file(path)})
+        records.append({"captureId": "support_policy", "bodyPath": policy.name, "digest": digest_file(policy)})
+        records.append({"captureId": "policy_invariants", "bodyPath": invariants.name, "digest": digest_file(invariants)})
+        manifest = root / "policy-capture.json"
+        manifest.write_text(json.dumps({"schemaVersion": 1, "captures": records}) + "\n")
+        decision = {
             "schemaVersion": 1,
-            "actionKey": "new_branch:8.6",
-            "action": "new_branch",
-            "agentContract": {"instructionDigests": digests},
-            "completionAssessment": {
-                "instructionDigests": digests,
-                "phaseStatus": "complete",
-                "criteria": [{"id": "done", "status": "passed", "evidence": ["evidence[0]"]}],
-                "unresolved": [],
-                "goNoGo": "go",
-            },
-            "preconditions": preconditions,
-            "evidence": evidence,
-            "repositories": ["mise-php"],
-            "editsRequired": True,
-            "allowedPaths": {"mise-php": ["support-snapshot.json", "lib/policy.lua"]},
-            "requiredChecks": ["Plugin contract"],
-            "risk": "lifecycle",
-            "agentOperations": [],
-            "budgets": {"maxModelCalls": 1, "maxRetries": 1, "timeoutMinutes": 30},
+            "trigger": "policy_changed",
+            "actionKey": action_key,
+            "policyDigest": digest_file(policy),
+            "policyInvariantsDigest": digest_file(invariants),
+            "phpBinPolicyCommit": commit_sha,
+            "synchronize": True,
         }
-        return plan, {
-            "contract": contract,
-            "shared": shared,
-            "phase": phase,
-            "event": event,
-            "capture_manifest": manifest,
-            "policy_digest": policy_digest,
-            "invariants_digest": invariants_digest,
-            "mise_head": preconditions["misePhpHead"],
-        }
+        return manifest, decision
 
-    def test_admission_binds_complete_policy_capture_and_contract(self):
+    def test_synchronization_plan_is_bound_to_the_complete_policy_capture(self):
         with tempfile.TemporaryDirectory() as temporary:
-            plan, arguments = self.admission_fixture(pathlib.Path(temporary))
-            self.assertTrue(admit(plan, **arguments)["admitted"])
-            with self.assertRaises(AdmissionError):
-                admit(plan, **{**arguments, "policy_digest": "sha256:" + "f" * 64})
+            root = pathlib.Path(temporary)
+            manifest, decision = self.capture_fixture(root)
+            plan = synchronization_plan(decision, manifest, "d" * 40, "e" * 40, "enabled")
+            self.assertEqual("new_branch:8.6", plan["actionKey"])
+            self.assertEqual({"mise-php": ["lib/policy.lua", "support-snapshot.json"]}, plan["allowedPaths"])
+            self.assertEqual(
+                {
+                    "misePhpHead": "d" * 40,
+                    "phpBinPolicyCommit": "a" * 40,
+                    "supportPolicyDigest": decision["policyDigest"],
+                    "policyInvariantsDigest": decision["policyInvariantsDigest"],
+                    "phpBinOperatorCommit": "e" * 40,
+                    "operatorState": "enabled",
+                },
+                plan["preconditions"],
+            )
+            self.assertEqual(4, len(plan["evidenceDigests"]))
+            rejected = (
+                ({**decision, "trigger": "quiet"}, "enabled"),
+                ({**decision, "actionKey": "bootstrap"}, "enabled"),
+                ({**decision, "policyDigest": "sha256:" + "f" * 64}, "enabled"),
+                ({**decision, "phpBinPolicyCommit": "b" * 40}, "enabled"),
+                (decision, "paused"),
+            )
+            for bad_decision, state in rejected:
+                with self.assertRaises(ConsumerError, msg=(bad_decision, state)):
+                    synchronization_plan(bad_decision, manifest, "d" * 40, "e" * 40, state)
+            with self.assertRaises(ConsumerError):
+                synchronization_plan(decision, manifest, "main", "e" * 40, "enabled")
+            (root / "php-bin-main.json").write_text('{"sha":"' + "b" * 40 + '"}\n')
+            with self.assertRaisesRegex(ConsumerError, "captured body changed"):
+                synchronization_plan(decision, manifest, "d" * 40, "e" * 40, "enabled")
+            document = json.loads(manifest.read_text())
+            document["captures"] = document["captures"][1:]
+            manifest.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ConsumerError, "incomplete"):
+                synchronization_plan(decision, manifest, "d" * 40, "e" * 40, "enabled")
 
-    def test_admission_requires_the_generated_policy_lua_path(self):
+    def test_synchronize_regenerates_the_snapshot_in_its_reviewed_layout(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        snapshot = root / "support-snapshot.json"
+        self.assertEqual(snapshot.read_text(), render_snapshot(json.loads(snapshot.read_text())))
         with tempfile.TemporaryDirectory() as temporary:
-            plan, arguments = self.admission_fixture(pathlib.Path(temporary))
-            plan["allowedPaths"] = {"mise-php": ["support-snapshot.json"]}
-            with self.assertRaises(AdmissionError) as ctx:
-                admit(plan, **arguments)
-            self.assertIn("lib/policy.lua", str(ctx.exception))
-            plan["allowedPaths"] = {"mise-php": ["support-snapshot.json", "lib/policy.lua"]}
-            self.assertTrue(admit(plan, **arguments)["admitted"])
+            work = pathlib.Path(temporary)
+            manifest, decision = self.capture_fixture(work)
+            plan = synchronization_plan(decision, manifest, "d" * 40, "e" * 40, "enabled")
+            target = work / "support-snapshot.json.out"
+            written = synchronize(plan, work / "support-policy.json", target)
+            self.assertEqual(["8.5", "8.6"], written["maintainedBranches"])
+            self.assertEqual(render_snapshot(written), target.read_text())
+            self.assertEqual("a" * 40, json.loads(target.read_text())["phpBinPolicyCommit"])
+            (work / "support-policy.json").write_text('{"maintainedBranches":["8.6"]}\n')
+            with self.assertRaisesRegex(ConsumerError, "not the one the plan is bound to"):
+                synchronize(plan, work / "support-policy.json", target)
+
+    def test_synchronization_end_to_end_seals_exactly_the_generated_pair(self):
+        project = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repo = root / "repo"
+            (repo / "lib").mkdir(parents=True)
+            (repo / "scripts").mkdir()
+            shutil.copy(project / "support-snapshot.json", repo / "support-snapshot.json")
+            shutil.copy(project / "lib/policy.lua", repo / "lib/policy.lua")
+            shutil.copy(project / "scripts/generate-policy-lua", repo / "scripts/generate-policy-lua")
+            for arguments in (["init", "-q", "-b", "main"], ["config", "user.name", "test"],
+                              ["config", "user.email", "test@invalid"], ["add", "-A"], ["commit", "-q", "-m", "base"]):
+                subprocess.run(["git", *arguments], cwd=repo, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True,
+                                  stdout=subprocess.PIPE).stdout.strip()
+            # validate runs this suite at every sealed commit the consumer produces, so the
+            # added branch is derived from the live snapshot rather than named: a snapshot
+            # that already lists 8.6 must not make the fixture policy non-canonical.
+            maintained = json.loads((project / "support-snapshot.json").read_text())["maintainedBranches"]
+            major, minor = maintained[-1].split(".")
+            added = f"{major}.{int(minor) + 1}"
+            branches = [*maintained, added]
+            manifest, decision = self.capture_fixture(root, branches, f"new_branch:{added}")
+            plan = synchronization_plan(decision, manifest, base, "e" * 40, "enabled")
+            synchronize(plan, root / "support-policy.json", repo / "support-snapshot.json")
+            subprocess.run([str(repo / "scripts/generate-policy-lua")], check=True)
+            sealed = seal(repo, base, plan, root / "support-policy.json", root / "sealed")
+            self.assertEqual(
+                ["lib/policy.lua", "support-snapshot.json"], [item["path"] for item in sealed["files"]]
+            )
+            self.assertIn(f'"{added}",', (repo / "lib/policy.lua").read_text())
 
     def generated_policy_lua(self, branches):
         return (
@@ -530,29 +514,11 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         base = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE
         ).stdout.strip()
-        digests = {
-            "shared": "sha256:" + "1" * 64,
-            "phaseTemplate": "sha256:" + "2" * 64,
-            "eventContract": "sha256:" + "3" * 64,
-        }
         return repo, base, {
             "plan": {
                 "actionKey": "new_branch:8.6",
-                "agentContract": {"instructionDigests": digests},
                 "preconditions": preconditions,
                 "allowedPaths": {"mise-php": ["support-snapshot.json", "lib/policy.lua"]},
-            },
-            "result": {
-                "instructionDigests": digests,
-                "phaseStatus": "complete",
-                "criteria": [{"id": "done", "status": "passed", "evidence": ["preconditions.misePhpHead"]}],
-                "unresolved": [],
-                "goNoGo": "go",
-            },
-            "contract": {
-                "actionKey": "new_branch:8.6",
-                "preconditions": preconditions,
-                "completionCriteria": [{"id": "done"}],
             },
             "policy_path": policy,
             "output": root / "sealed",

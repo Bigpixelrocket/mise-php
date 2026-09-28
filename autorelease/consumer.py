@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Opaque policy comparison and exact-commit readiness records.
+"""Deterministic consumption of the accepted php-bin support policy.
 
-This module does not classify PHP lifecycle events. Codex owns semantics.
+php-bin classifies PHP lifecycle events and accepts the support policy; this
+module never looks at upstream PHP data. It captures that policy at the exact
+commit that last changed it, compares it with the local snapshot, binds one
+synchronization to the exact captured bytes and commits, regenerates
+`support-snapshot.json` from it, and writes the exact-commit readiness record
+php-bin requires before it publishes a new branch.
 """
 
 from __future__ import annotations
@@ -32,6 +37,18 @@ POLICY_COMMIT_SELECTOR_URL = (
 )
 POLICY_COMMIT_ROOT = "https://api.github.com/repos/bigpixelrocket/php-bin/commits"
 RAW_ROOT = "https://raw.githubusercontent.com/bigpixelrocket/php-bin"
+POLICY_CAPTURE_IDS = frozenset({"php_bin_policy_selector", "php_bin_state", "support_policy", "policy_invariants"})
+# The only paths a synchronization writes: the snapshot, and the Lua policy table
+# scripts/generate-policy-lua derives from it.
+SYNCHRONIZED_PATHS = ["lib/policy.lua", "support-snapshot.json"]
+SNAPSHOT_FIELDS = (
+    "schemaVersion",
+    "phpBinPolicyCommit",
+    "policyDigest",
+    "policyInvariantsDigest",
+    "maintainedBranches",
+    "generated",
+)
 
 
 class ConsumerError(RuntimeError):
@@ -59,8 +76,8 @@ def action_filename(action_key: str, suffix: str = ".json") -> str:
 
     php-bin names event records from an action key with exactly this mapping, and the
     readiness record it reads back is matched by name, so the two repositories share one
-    definition of it. The key is model-authored and reaches shell arguments and
-    repository paths, so its alphabet is re-asserted at this boundary.
+    definition of it. The key comes from a captured policy or plan and reaches shell
+    arguments and repository paths, so its alphabet is re-asserted at this boundary.
     """
     if not ACTION_KEY_RE.fullmatch(action_key):
         raise ConsumerError(f"invalid action key: {action_key}")
@@ -297,8 +314,127 @@ def compare(
         "policyDigest": policy_digest,
         "policyInvariantsDigest": invariants_digest,
         "phpBinPolicyCommit": commit_sha,
-        "modelCall": trigger != "quiet",
+        "synchronize": trigger != "quiet",
     }
+
+
+def _captured_body(capture_manifest: pathlib.Path, capture: dict[str, Any]) -> pathlib.Path:
+    """Resolve one captured body beside its manifest and prove it still has its digest."""
+    body_path = capture.get("bodyPath")
+    if not isinstance(body_path, str) or not body_path or "/" in body_path or body_path.startswith("."):
+        raise ConsumerError(f"captured body path is unsafe: {body_path}")
+    path = capture_manifest.parent / body_path
+    if not path.is_file() or digest(path.read_bytes()) != capture.get("digest"):
+        raise ConsumerError(f"captured body changed: {capture.get('captureId')}")
+    return path
+
+
+def synchronization_plan(
+    decision: dict[str, Any],
+    capture_manifest: pathlib.Path,
+    mise_head: str,
+    operator_commit: str,
+    operator_state: str,
+) -> dict[str, Any]:
+    """Bind one snapshot synchronization to the exact captured policy and commits.
+
+    The plan is derived, never authored: its action key is the accepted policy's own
+    lifecycle key, its preconditions are the exact mise-php base, php-bin policy
+    commit, policy and invariants digests, and php-bin operator state, and its only
+    admitted paths are the snapshot and the Lua table generated from it. It fails
+    closed when the capture set is incomplete, a body changed after capture, the
+    selector and commit captures disagree, unattended mutation is paused, or the
+    policy carries no lifecycle key to record readiness for (a hand-edited
+    `bootstrap` policy).
+    """
+    if decision.get("trigger") != "policy_changed":
+        raise ConsumerError("only a changed policy needs a synchronization")
+    action_key = decision.get("actionKey")
+    if not isinstance(action_key, str) or not ACTION_KEY_RE.fullmatch(action_key):
+        raise ConsumerError(f"accepted policy carries no lifecycle action key to synchronize: {action_key}")
+    for name, value in {"mise-php head": mise_head, "php-bin operator commit": operator_commit}.items():
+        if not re.fullmatch(r"[0-9a-f]{40}", value or ""):
+            raise ConsumerError(f"{name} is not an exact SHA")
+    if operator_state != "enabled":
+        raise ConsumerError("unattended mutation is paused in php-bin")
+    document = load(capture_manifest)
+    captures = document.get("captures") if isinstance(document, dict) else None
+    if not isinstance(document, dict) or document.get("schemaVersion") != 1 or not isinstance(captures, list):
+        raise ConsumerError("invalid policy capture manifest")
+    by_id = {item.get("captureId"): item for item in captures if isinstance(item, dict)}
+    if len(by_id) != len(captures) or set(by_id) != POLICY_CAPTURE_IDS:
+        raise ConsumerError("policy capture set is incomplete or ambiguous")
+    bodies = {capture_id: _captured_body(capture_manifest, capture) for capture_id, capture in by_id.items()}
+    if by_id["support_policy"].get("digest") != decision.get("policyDigest"):
+        raise ConsumerError("captured support policy digest changed")
+    if by_id["policy_invariants"].get("digest") != decision.get("policyInvariantsDigest"):
+        raise ConsumerError("captured policy invariants digest changed")
+    selector = load(bodies["php_bin_policy_selector"])
+    commit = load(bodies["php_bin_state"])
+    policy_commit = decision.get("phpBinPolicyCommit")
+    if (
+        not isinstance(selector, list)
+        or len(selector) != 1
+        or not isinstance(selector[0], dict)
+        or selector[0].get("sha") != policy_commit
+        or not isinstance(commit, dict)
+        or commit.get("sha") != policy_commit
+    ):
+        raise ConsumerError("captured php-bin policy commit changed")
+    return {
+        "schemaVersion": 1,
+        "actionKey": action_key,
+        "preconditions": {
+            "misePhpHead": mise_head,
+            "phpBinPolicyCommit": policy_commit,
+            "supportPolicyDigest": decision["policyDigest"],
+            "policyInvariantsDigest": decision["policyInvariantsDigest"],
+            "phpBinOperatorCommit": operator_commit,
+            "operatorState": operator_state,
+        },
+        "allowedPaths": {"mise-php": list(SYNCHRONIZED_PATHS)},
+        "evidenceDigests": sorted(capture["digest"] for capture in by_id.values()),
+    }
+
+
+def render_snapshot(snapshot: dict[str, Any]) -> str:
+    """Render the support snapshot in its reviewed layout: fixed key order, inline lists."""
+    lines = []
+    for key in SNAPSHOT_FIELDS:
+        value = snapshot[key]
+        rendered = (
+            "[" + ", ".join(json.dumps(item) for item in value) + "]"
+            if isinstance(value, list)
+            else json.dumps(value)
+        )
+        lines.append(f"  {json.dumps(key)}: {rendered}")
+    return "{\n" + ",\n".join(lines) + "\n}\n"
+
+
+def synchronize(plan: dict[str, Any], policy: pathlib.Path, snapshot: pathlib.Path) -> dict[str, Any]:
+    """Regenerate the support snapshot from the exact policy a plan is bound to."""
+    preconditions = plan.get("preconditions") if isinstance(plan, dict) else None
+    if not isinstance(preconditions, dict):
+        raise ConsumerError("synchronization plan has no preconditions")
+    if digest(policy.read_bytes()) != preconditions.get("supportPolicyDigest"):
+        raise ConsumerError("captured support policy is not the one the plan is bound to")
+    branches = load(policy).get("maintainedBranches")
+    if not (
+        isinstance(branches, list)
+        and all(isinstance(value, str) and re.fullmatch(r"\d+\.\d+", value) for value in branches)
+        and branches == sorted(set(branches), key=lambda value: tuple(map(int, value.split("."))))
+    ):
+        raise ConsumerError("captured php-bin branches are invalid or non-canonical")
+    document = {
+        "schemaVersion": 1,
+        "phpBinPolicyCommit": preconditions.get("phpBinPolicyCommit"),
+        "policyDigest": preconditions.get("supportPolicyDigest"),
+        "policyInvariantsDigest": preconditions.get("policyInvariantsDigest"),
+        "maintainedBranches": branches,
+        "generated": True,
+    }
+    snapshot.write_text(render_snapshot(document))
+    return document
 
 
 def readiness(
@@ -361,6 +497,17 @@ def main() -> int:
     ready.add_argument("--mise-commit", required=True)
     ready.add_argument("--evidence-digest", action="append", required=True)
     ready.add_argument("--output", required=True, type=pathlib.Path)
+    plan = sub.add_parser("plan")
+    plan.add_argument("--decision", required=True, type=pathlib.Path)
+    plan.add_argument("--capture-manifest", required=True, type=pathlib.Path)
+    plan.add_argument("--mise-head", required=True)
+    plan.add_argument("--operator-commit", required=True)
+    plan.add_argument("--operator-state", required=True)
+    plan.add_argument("--output", required=True, type=pathlib.Path)
+    sync = sub.add_parser("synchronize")
+    sync.add_argument("--plan", required=True, type=pathlib.Path)
+    sync.add_argument("--policy", required=True, type=pathlib.Path)
+    sync.add_argument("--snapshot", required=True, type=pathlib.Path)
     filename = sub.add_parser("action-filename")
     filename.add_argument("action_key")
     filename.add_argument("--suffix", default=".json")
@@ -374,6 +521,18 @@ def main() -> int:
                     "captures": fetch_policy_set(args.output, args.invariants_output, args.commit_output),
                 },
             )
+        elif args.command == "plan":
+            result = synchronization_plan(
+                load(args.decision),
+                args.capture_manifest,
+                args.mise_head,
+                args.operator_commit,
+                args.operator_state,
+            )
+            write(args.output, result)
+            print(json.dumps(result))
+        elif args.command == "synchronize":
+            print(json.dumps(synchronize(load(args.plan), args.policy, args.snapshot)))
         elif args.command == "action-filename":
             print(action_filename(args.action_key, args.suffix))
         elif args.command == "compare":
