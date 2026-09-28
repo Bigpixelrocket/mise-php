@@ -28,9 +28,9 @@ Required repository state:
   from satisfying the same context name.
 - Enable squash merge, auto-merge, update branch, and automatic head-branch
   deletion; disable merge commits and rebase merge.
-- Keep the default workflow token read-only; deterministic downstream jobs
-  explicitly request write scopes while repository-scoped Codex jobs remain
-  `contents: read`.
+- Keep the default workflow token read-only; the merge and readiness job
+  explicitly requests write scopes while the compare, synchronization, and
+  validation jobs remain `contents: read`.
 - Do not allow the workflow token to approve pull requests.
 - Because GitHub suppresses ordinary PR events created by `GITHUB_TOKEN`, each
   deterministic PR coordinator explicitly dispatches `ci.yml` and
@@ -38,18 +38,16 @@ Required repository state:
   successful validator runs for that head SHA, and only then publishes the
   Actions-owned check evidence plus PR-visible commit statuses with the exact
   validator URLs.
-- Allow GitHub-owned Actions plus only `openai/codex-action` and
-  `jdx/mise-action`, and require every Action reference to use a full commit
-  SHA.
+- Allow GitHub-owned Actions plus only `jdx/mise-action`, and require every
+  Action reference to use a full commit SHA.
 - Create the protected `php-autorelease-publish` environment.
 - Enable GitHub immutable releases for future repository releases.
 - Set `AUTORELEASE_OWNER=loadinglucian`.
-- Keep a distinct repository-scoped `OPENAI_API_KEY` secret.
 
-CODEOWNERS protects agent instructions, workflows, schemas, admission, sealing,
-and merge admission. Generated snapshots and deterministic readiness records
-remain outside CODEOWNERS so their exact-SHA PRs can merge; runtime sealing
-still rejects event/readiness paths as agent-authored changes.
+CODEOWNERS protects workflows, the consumer, sealing, and merge admission.
+Generated snapshots and deterministic readiness records remain outside
+CODEOWNERS so their exact-SHA PRs can merge; runtime sealing still rejects
+event/readiness paths in a synchronization diff.
 
 ```bash
 ./php-bin/scripts/snapshot-github-admin-state \

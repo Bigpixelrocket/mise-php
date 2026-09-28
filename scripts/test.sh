@@ -6,8 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 "$SCRIPT_DIR/check-public-language.sh"
-"$SCRIPT_DIR/validate-codex-action-inputs"
-"$SCRIPT_DIR/validate-structured-output-schemas"
 "$SCRIPT_DIR/generate-policy-lua"
 git -C "$PROJECT_ROOT" diff --exit-code lib/policy.lua
 

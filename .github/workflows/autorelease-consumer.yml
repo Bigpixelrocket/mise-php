@@ -17,12 +17,13 @@ defaults:
     shell: bash
 
 jobs:
-  investigate:
+  compare:
+    name: Capture and compare the accepted policy
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       trigger: ${{ steps.compare.outputs.trigger }}
-      edits_required: ${{ steps.plan.outputs.edits_required }}
+      synchronize: ${{ steps.plan.outputs.synchronize }}
       base_sha: ${{ steps.plan.outputs.base_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -89,158 +90,67 @@ jobs:
             --snapshot support-snapshot.json \
             --output autorelease-run/decision.json
           echo "trigger=$(jq -r .trigger autorelease-run/decision.json)" >> "$GITHUB_OUTPUT"
-      - name: Prepare exact investigation contract
-        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
-        run: |
-          jq -n \
-            --arg actionKey "$(jq -r .actionKey autorelease-run/decision.json)" \
-            --arg misePhpHead "$(git rev-parse HEAD)" \
-            --arg phpBinPolicyCommit "$(jq -r .phpBinPolicyCommit autorelease-run/decision.json)" \
-            --arg supportPolicyDigest "$(jq -r .policyDigest autorelease-run/decision.json)" \
-            --arg policyInvariantsDigest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
-            --arg phpBinOperatorCommit "${{ steps.operator.outputs.commit }}" \
-            --arg operatorState "${{ steps.operator.outputs.state }}" \
-            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase investigation)" \
-            '{
-              contractVersion:1,
-              phase:"investigation",
-              goal:"Determine the exact mise-php work required by the accepted php-bin policy.",
-              actionKey:$actionKey,
-              preconditions:{misePhpHead:$misePhpHead,phpBinPolicyCommit:$phpBinPolicyCommit,supportPolicyDigest:$supportPolicyDigest,policyInvariantsDigest:$policyInvariantsDigest,phpBinOperatorCommit:$phpBinOperatorCommit,operatorState:$operatorState},
-              allowedAuthority:["read_repository","read_captured_policy"],
-              nonGoals:["upstream_php_classification","repository_mutation","required_check_execution","irreversible_github_effect"],
-              completionCriteria:$completionCriteria,
-              stopConditions:["missing_or_contradictory_policy","changed_precondition","required_protected_change"]
-            }' > autorelease-run/event-contract.json
-          shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
-          phase="sha256:$(shasum -a 256 .github/codex/autorelease/investigation.md | awk '{print $1}')"
-          event="sha256:$(shasum -a 256 autorelease-run/event-contract.json | awk '{print $1}')"
-          {
-            cat .github/codex/autorelease/shared.md
-            cat .github/codex/autorelease/investigation.md
-            echo
-            echo '# Event contract'
-            jq . autorelease-run/event-contract.json
-            echo
-            echo '# Required instruction digests'
-            jq -n --arg shared "$shared" --arg phaseTemplate "$phase" --arg eventContract "$event" \
-              '{shared:$shared,phaseTemplate:$phaseTemplate,eventContract:$eventContract}'
-          } > autorelease-run/investigation-prompt.md
-          mkdir -p "$RUNNER_TEMP/codex-home"
-          cp .codex/investigation.config.toml "$RUNNER_TEMP/codex-home/config.toml"
-      - name: Run repository-scoped offline Codex investigation
-        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: 0.145.0
-          prompt-file: autorelease-run/investigation-prompt.md
-          output-file: autorelease-run/autorelease-plan.json
-          codex-home: ${{ runner.temp }}/codex-home
-          sandbox: read-only
-          safety-strategy: drop-sudo
-          allow-users: loadinglucian
-          allow-bots: false
-          allow-bot-users: github-actions[bot]
-          codex-args: '["--strict-config","--ephemeral","--output-schema","schemas/autorelease-plan.schema.json"]'
-      - name: Admit plan against exact policy and checkout
-        if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
-        run: |
-          ./scripts/admit-autorelease-plan \
-            --plan autorelease-run/autorelease-plan.json \
-            --contract autorelease-run/event-contract.json \
-            --shared .github/codex/autorelease/shared.md \
-            --phase .github/codex/autorelease/investigation.md \
-            --event-contract autorelease-run/event-contract.json \
-            --capture-manifest autorelease-run/policy-capture.json \
-            --policy-digest "$(jq -r .policyDigest autorelease-run/decision.json)" \
-            --invariants-digest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
-            --mise-head "$(git rev-parse HEAD)" \
-            --output autorelease-run/admission.json
-      - name: Expose plan
+      # Everything the synchronization may do is derived here from the captured policy:
+      # its lifecycle action key, its exact preconditions, and its two generated paths.
+      - name: Bind the synchronization to the exact captured policy
         id: plan
         if: steps.compare.outputs.trigger != 'quiet' && steps.operator.outputs.state == 'enabled'
+        env:
+          OPERATOR_COMMIT: ${{ steps.operator.outputs.commit }}
+          OPERATOR_STATE: ${{ steps.operator.outputs.state }}
         run: |
-          echo "edits_required=$(jq -r .editsRequired autorelease-run/autorelease-plan.json)" >> "$GITHUB_OUTPUT"
+          ./scripts/consume-php-policy plan \
+            --decision autorelease-run/decision.json \
+            --capture-manifest autorelease-run/policy-capture.json \
+            --mise-head "$(git rev-parse HEAD)" \
+            --operator-commit "$OPERATOR_COMMIT" \
+            --operator-state "$OPERATOR_STATE" \
+            --output autorelease-run/synchronization-plan.json
+          echo "synchronize=true" >> "$GITHUB_OUTPUT"
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: mise-autorelease-investigation-${{ github.run_id }}
+          name: mise-autorelease-comparison-${{ github.run_id }}
           path: autorelease-run/
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
 
-  implement:
-    needs: investigate
-    if: needs.investigate.outputs.edits_required == 'true'
+  synchronize:
+    name: Deterministic snapshot synchronization and sealing
+    needs: compare
+    if: needs.compare.outputs.synchronize == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.investigate.outputs.base_sha }}
+          ref: ${{ needs.compare.outputs.base_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: mise-autorelease-investigation-${{ github.run_id }}
+          name: mise-autorelease-comparison-${{ github.run_id }}
           path: autorelease-run
-      - name: Prepare implementation contract and prompt
+      - name: Regenerate the support snapshot and plugin policy table
         run: |
-          jq --argjson completionCriteria "$(./scripts/prepare-agent-task --phase implementation)" \
-            '.phase="implementation"
-             | .goal="Implement the admitted mise-php policy synchronization at the exact base."
-             | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
-             | .nonGoals=["protected_control_change","irreversible_github_effect"]
-             | .completionCriteria=$completionCriteria' \
-            autorelease-run/event-contract.json > autorelease-run/implementation-contract.json
-          shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
-          phase="sha256:$(shasum -a 256 .github/codex/autorelease/implementation.md | awk '{print $1}')"
-          event="sha256:$(shasum -a 256 autorelease-run/implementation-contract.json | awk '{print $1}')"
-          {
-            cat .github/codex/autorelease/shared.md
-            cat .github/codex/autorelease/implementation.md
-            echo
-            jq . autorelease-run/implementation-contract.json
-            jq -n --arg shared "$shared" --arg phaseTemplate "$phase" --arg eventContract "$event" \
-              '{shared:$shared,phaseTemplate:$phaseTemplate,eventContract:$eventContract}'
-            echo
-            cat autorelease-run/autorelease-plan.json
-          } > autorelease-run/implementation-prompt.md
-          jq --arg shared "$shared" --arg phaseTemplate "$phase" --arg eventContract "$event" \
-            '.agentContract.instructionDigests={shared:$shared,phaseTemplate:$phaseTemplate,eventContract:$eventContract}' \
-            autorelease-run/autorelease-plan.json > autorelease-run/implementation-plan.json
-          mkdir -p "$RUNNER_TEMP/codex-home"
-          cp .codex/implementation.config.toml "$RUNNER_TEMP/codex-home/config.toml"
-      - name: Run offline Codex implementation
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: 0.145.0
-          prompt-file: autorelease-run/implementation-prompt.md
-          output-file: autorelease-run/implementation-result.json
-          codex-home: ${{ runner.temp }}/codex-home
-          sandbox: workspace-write
-          safety-strategy: drop-sudo
-          allow-users: loadinglucian
-          allow-bots: false
-          allow-bot-users: github-actions[bot]
-          codex-args: '["--strict-config","--ephemeral","--output-schema","schemas/agent-completion-assessment.schema.json"]'
-      - name: Seal admitted diff
+          ./scripts/consume-php-policy synchronize \
+            --plan autorelease-run/synchronization-plan.json \
+            --policy autorelease-run/support-policy.json \
+            --snapshot support-snapshot.json
+          ./scripts/generate-policy-lua
+      - name: Seal exact deterministic diff
         env:
-          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
+          BASE_SHA: ${{ needs.compare.outputs.base_sha }}
         run: |
           ./scripts/seal-autorelease-patch \
             --repo . \
             --base "$BASE_SHA" \
-            --plan autorelease-run/implementation-plan.json \
-            --result autorelease-run/implementation-result.json \
-            --contract autorelease-run/implementation-contract.json \
+            --plan autorelease-run/synchronization-plan.json \
             --policy autorelease-run/support-policy.json \
             --output autorelease-run/sealed
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -252,7 +162,7 @@ jobs:
           include-hidden-files: true
 
   validate:
-    needs: [investigate, implement]
+    needs: [compare, synchronize]
     outputs:
       passed: ${{ steps.checks.outputs.passed }}
     runs-on: macos-26
@@ -263,7 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.investigate.outputs.base_sha }}
+          ref: ${{ needs.compare.outputs.base_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -276,10 +186,9 @@ jobs:
           actual="sha256:$(shasum -a 256 autorelease-run/sealed/sealed.patch | awk '{print $1}')"
           test "$actual" = "$expected"
           git apply --index autorelease-run/sealed/sealed.patch
-      - name: Run authoritative plugin checks without OpenAI credential
+      - name: Run authoritative plugin checks
         id: run-checks
         run: |
-          test -z "${OPENAI_API_KEY:-}"
           set +e
           ./scripts/test.sh 2>&1 | tee autorelease-run/authoritative-checks.log
           status="${PIPESTATUS[0]}"
@@ -292,7 +201,7 @@ jobs:
       - name: Create reproducible validated commit bundle
         if: steps.run-checks.outputs.status == 'passed'
         env:
-          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
+          BASE_SHA: ${{ needs.compare.outputs.base_sha }}
         run: |
           export GIT_AUTHOR_NAME=autorelease-validator
           export GIT_AUTHOR_EMAIL=autorelease@invalid
@@ -320,162 +229,23 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
-      # Last step on purpose, exactly as in validate-repair: the merge job keys on
-      # this output and downloads the validated artifact, so a failed upload must
-      # leave `passed` unset rather than claim a validated patch is waiting. An
-      # unset output reads as not-passed to both the merge job and repair.
+      # There is no repair phase: a failing plugin check fails the run after its log
+      # is retained, and GitHub Actions failure email reaches the owner.
+      - name: Stop on a failed authoritative check
+        if: steps.run-checks.outputs.status != 'passed'
+        run: |
+          echo "Plugin checks failed on the synchronized snapshot; see authoritative-checks.log." >&2
+          exit 1
+      # Last step on purpose: the merge job keys on this output and downloads the
+      # validated artifact, so a failed upload must leave `passed` unset rather than
+      # claim a validated patch is waiting.
       - name: Record that the patch validated
-        id: checks
-        if: steps.run-checks.outputs.status == 'passed'
-        run: echo "passed=true" >> "$GITHUB_OUTPUT"
-
-  repair:
-    needs: [investigate, validate]
-    if: needs.validate.outputs.passed != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.investigate.outputs.base_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: mise-failed-autorelease-validation-${{ github.run_id }}
-          path: autorelease-run
-      - name: Restore failed patch and prepare bounded repair
-        run: |
-          git apply --index autorelease-run/sealed/sealed.patch
-          fingerprint="sha256:$(shasum -a 256 autorelease-run/authoritative-checks.log | awk '{print $1}')"
-          jq --arg goal "Repair the retained authoritative failure $fingerprint without expanding the admitted diff." \
-            --argjson completionCriteria "$(./scripts/prepare-agent-task --phase repair)" \
-            '.phase="repair"
-             | .goal=$goal
-             | .allowedAuthority=["workspace_write_admitted_paths","local_advisory_checks"]
-             | .nonGoals=["protected_control_change","irreversible_github_effect"]
-             | .stopConditions=["changed_precondition","repeated_or_unrelated_failure","required_protected_change"]
-             | .completionCriteria=$completionCriteria' \
-            autorelease-run/implementation-contract.json > autorelease-run/repair-contract.json
-          shared="sha256:$(shasum -a 256 .github/codex/autorelease/shared.md | awk '{print $1}')"
-          phase="sha256:$(shasum -a 256 .github/codex/autorelease/repair.md | awk '{print $1}')"
-          event="sha256:$(shasum -a 256 autorelease-run/repair-contract.json | awk '{print $1}')"
-          jq --arg shared "$shared" --arg phaseTemplate "$phase" --arg eventContract "$event" \
-            '.agentContract.instructionDigests={shared:$shared,phaseTemplate:$phaseTemplate,eventContract:$eventContract}' \
-            autorelease-run/implementation-plan.json > autorelease-run/repair-plan.json
-          {
-            cat .github/codex/autorelease/shared.md
-            cat .github/codex/autorelease/repair.md
-            jq . autorelease-run/repair-contract.json
-            printf '\n# Retained authoritative failure log\n```text\n'
-            cat autorelease-run/authoritative-checks.log
-            printf '\n```\n# Exact admitted plan\n```json\n'
-            jq . autorelease-run/repair-plan.json
-            printf '\n```\n'
-          } > autorelease-run/repair-prompt.md
-          mkdir -p "$RUNNER_TEMP/codex-home"
-          cp .codex/repair.config.toml "$RUNNER_TEMP/codex-home/config.toml"
-      - name: Run one offline Codex repair
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: 0.145.0
-          prompt-file: autorelease-run/repair-prompt.md
-          output-file: autorelease-run/repair-result.json
-          codex-home: ${{ runner.temp }}/codex-home
-          sandbox: workspace-write
-          safety-strategy: drop-sudo
-          allow-users: loadinglucian
-          allow-bots: false
-          allow-bot-users: github-actions[bot]
-          codex-args: '["--strict-config","--ephemeral","--output-schema","schemas/agent-completion-assessment.schema.json"]'
-      - name: Seal combined repaired diff
-        env:
-          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
-        run: |
-          mv autorelease-run/repair-plan.json autorelease-run/implementation-plan.json
-          ./scripts/seal-autorelease-patch \
-            --repo . \
-            --base "$BASE_SHA" \
-            --plan autorelease-run/implementation-plan.json \
-            --result autorelease-run/repair-result.json \
-            --contract autorelease-run/repair-contract.json \
-            --policy autorelease-run/support-policy.json \
-            --output autorelease-run/sealed-repair
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: mise-repaired-autorelease-patch-${{ github.run_id }}
-          path: autorelease-run/
-          if-no-files-found: error
-          retention-days: 90
-          include-hidden-files: true
-
-  validate-repair:
-    needs: [investigate, repair]
-    outputs:
-      passed: ${{ steps.checks.outputs.passed }}
-    runs-on: macos-26
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.investigate.outputs.base_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: mise-repaired-autorelease-patch-${{ github.run_id }}
-          path: autorelease-run
-      - name: Apply and validate exact repaired bytes
-        run: |
-          expected="$(jq -r .patchDigest autorelease-run/sealed-repair/patch-manifest.json)"
-          actual="sha256:$(shasum -a 256 autorelease-run/sealed-repair/sealed.patch | awk '{print $1}')"
-          test "$actual" = "$expected"
-          git apply --index autorelease-run/sealed-repair/sealed.patch
-          test -z "${OPENAI_API_KEY:-}"
-          ./scripts/test.sh
-          # The merge job reads autorelease-run/sealed, so the repaired seal has to
-          # arrive under that name. The rejected seal is renamed rather than
-          # overwritten: it is the evidence of what the repair replaced, and it ships
-          # in the same artifact.
-          mv autorelease-run/sealed autorelease-run/sealed-failed
-          cp -R autorelease-run/sealed-repair autorelease-run/sealed
-      - name: Create repaired validated commit bundle
-        env:
-          BASE_SHA: ${{ needs.investigate.outputs.base_sha }}
-        run: |
-          export GIT_AUTHOR_NAME=autorelease-validator
-          export GIT_AUTHOR_EMAIL=autorelease@invalid
-          export GIT_COMMITTER_NAME=autorelease-validator
-          export GIT_COMMITTER_EMAIL=autorelease@invalid
-          export GIT_AUTHOR_DATE=2000-01-01T00:00:00Z
-          export GIT_COMMITTER_DATE=2000-01-01T00:00:00Z
-          git commit -m "chore: apply admitted autorelease repair"
-          jq -n --arg headSha "$(git rev-parse HEAD)" --arg tree "$(git rev-parse HEAD^{tree})" \
-            '{headSha:$headSha,tree:$tree,checks:{"Plugin contract":"success"}}' > autorelease-run/validation.json
-          git bundle create autorelease-run/validated.bundle HEAD "^$BASE_SHA"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: mise-validated-autorelease-patch-${{ github.run_id }}
-          path: autorelease-run/
-          if-no-files-found: error
-          retention-days: 90
-          include-hidden-files: true
-      # Last step on purpose: the merge job keys on this output, so it must not be
-      # set until the validated artifact it downloads has actually been uploaded.
-      - name: Record that the repaired patch validated
         id: checks
         run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   merge-and-record-readiness:
-    needs: [investigate, validate, validate-repair]
-    if: ${{ !cancelled() && (needs.validate.outputs.passed == 'true' || needs['validate-repair'].outputs.passed == 'true') }}
+    needs: [compare, validate]
+    if: needs.validate.outputs.passed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -487,7 +257,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.investigate.outputs.base_sha }}
+          ref: ${{ needs.compare.outputs.base_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -503,9 +273,9 @@ jobs:
           git fetch autorelease-run/validated.bundle "$validated"
           git checkout --detach "$validated"
           test "$(git rev-parse HEAD)" = "$validated"
-          action_key="$(jq -r .actionKey autorelease-run/implementation-plan.json)"
-          # The plan is model-authored. Admission already rejects a malformed
-          # action key, but this value reaches $GITHUB_OUTPUT and later shell
+          action_key="$(jq -r .actionKey autorelease-run/synchronization-plan.json)"
+          # The key comes from the captured policy and the plan already rejects a
+          # malformed one, but this value reaches $GITHUB_OUTPUT and later shell
           # steps, so its alphabet is re-asserted at the boundary.
           [[ "$action_key" =~ ^[A-Za-z0-9._:-]+$ ]]
           branch="autorelease/$(./scripts/consume-php-policy action-filename "$action_key" --suffix '')"
@@ -539,12 +309,12 @@ jobs:
             --invariants-output autorelease-run/current-policy-invariants.json \
             --commit-output autorelease-run/current-php-bin-main.json \
             --manifest autorelease-run/current-policy-capture.json
-          admitted_mise="$(jq -r .preconditions.misePhpHead autorelease-run/implementation-plan.json)"
-          admitted_php="$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/implementation-plan.json)"
-          admitted_policy="$(jq -r .preconditions.supportPolicyDigest autorelease-run/implementation-plan.json)"
-          admitted_invariants="$(jq -r .preconditions.policyInvariantsDigest autorelease-run/implementation-plan.json)"
-          admitted_operator_commit="$(jq -r .preconditions.phpBinOperatorCommit autorelease-run/implementation-plan.json)"
-          admitted_operator_state="$(jq -r .preconditions.operatorState autorelease-run/implementation-plan.json)"
+          admitted_mise="$(jq -r .preconditions.misePhpHead autorelease-run/synchronization-plan.json)"
+          admitted_php="$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/synchronization-plan.json)"
+          admitted_policy="$(jq -r .preconditions.supportPolicyDigest autorelease-run/synchronization-plan.json)"
+          admitted_invariants="$(jq -r .preconditions.policyInvariantsDigest autorelease-run/synchronization-plan.json)"
+          admitted_operator_commit="$(jq -r .preconditions.phpBinOperatorCommit autorelease-run/synchronization-plan.json)"
+          admitted_operator_state="$(jq -r .preconditions.operatorState autorelease-run/synchronization-plan.json)"
           current_operator_commit="$(gh api repos/Bigpixelrocket/php-bin/commits/main --jq .sha)"
           gh api "repos/Bigpixelrocket/php-bin/contents/.github/autorelease-operator.json?ref=$current_operator_commit" \
             --jq .content | base64 --decode > autorelease-run/current-operator.json
@@ -579,7 +349,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.patch.outputs.number }}
         run: gh pr merge "$PR_NUMBER" --squash --delete-branch
-      - name: Create readiness record at the merged implementation commit
+      - name: Create readiness record at the merged synchronization commit
         id: readiness
         env:
           GH_TOKEN: ${{ github.token }}
@@ -599,9 +369,9 @@ jobs:
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done
           ./scripts/consume-php-policy readiness \
             --action-key "$ACTION_KEY" \
-            --php-bin-commit "$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/implementation-plan.json)" \
-            --policy-digest "$(jq -r .preconditions.supportPolicyDigest autorelease-run/implementation-plan.json)" \
-            --policy-invariants-digest "$(jq -r .preconditions.policyInvariantsDigest autorelease-run/implementation-plan.json)" \
+            --php-bin-commit "$(jq -r .preconditions.phpBinPolicyCommit autorelease-run/synchronization-plan.json)" \
+            --policy-digest "$(jq -r .preconditions.supportPolicyDigest autorelease-run/synchronization-plan.json)" \
+            --policy-invariants-digest "$(jq -r .preconditions.policyInvariantsDigest autorelease-run/synchronization-plan.json)" \
             --mise-commit "$merged" \
             "${args[@]}" \
             --output "readiness/$filename"
@@ -612,7 +382,7 @@ jobs:
           git push origin HEAD
           url="$(gh pr create --base main --head "autorelease/readiness-${{ github.run_id }}" \
             --title "chore: record $ACTION_KEY readiness" \
-            --body "Deterministic readiness record for the exact merged implementation commit.")"
+            --body "Deterministic readiness record for the exact merged synchronization commit.")"
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
           echo "base_sha=$base" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

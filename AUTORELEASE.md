@@ -1,8 +1,9 @@
 # Autorelease
 
 How this repository consumes the accepted `php-bin` support policy,
-prepares bounded repository work, and records the exact-commit readiness
-that `php-bin` requires before it may publish a new branch.
+regenerates its support snapshot from it, and records the exact-commit
+readiness that `php-bin` requires before it may publish a new branch. No model
+takes part in any step.
 
 The scheduled `php-bin policy consumer` captures the accepted public
 `support-policy.json` and compares it with `support-snapshot.json`: the policy
@@ -11,29 +12,33 @@ branches, and any locally incomplete event. It does not fetch or classify
 upstream PHP lifecycle data. The run stops before that capture unless every
 path in `autorelease/shared-files.json` is byte-identical with `php-bin` at the
 exact commit the operator control was read from. When the exact policy
-changes, the repository-scoped pinned Codex Action produces an evidence-bound
-plan. Any implementation runs offline, without a GitHub write credential, and
-only against admitted paths.
+changes, `scripts/consume-php-policy plan` binds one synchronization to the
+captured policy: its action key is the policy's own lifecycle key
+(`new_branch:<branch>` or `branch_eol:<branch>:<date>`), its preconditions are
+the exact mise-php base, php-bin policy commit, policy and invariants digests,
+and php-bin operator state, and it admits exactly two paths.
+`scripts/consume-php-policy synchronize` then regenerates
+`support-snapshot.json` from the captured policy and `scripts/generate-policy-lua`
+regenerates `lib/policy.lua` from the snapshot. A policy change without a
+lifecycle key (a hand-edited `bootstrap` policy), a paused operator, or a
+capture whose bytes or commits disagree stops the run.
 
-Which paths those are is the point. The *harness* is protected and never
-model-editable: `scripts/test.sh`, `scripts/consume-php-policy`,
-`scripts/generate-policy-lua`, `scripts/check-public-language.sh`, the sealing
-and admission scripts, `test/`, `autorelease/`, `schemas/`, and
-`.github/workflows/`. The *product* stays admissible: `hooks/*.lua`, `lib/`,
-`metadata.lua`, and the generated `support-snapshot.json`. A model may change
-what the plugin does, never what decides whether it still works, so the
-protected plugin-contract tests are the standing control on every product
-change. `autorelease-consumer.yml` runs `./scripts/test.sh` from the sealed
-model commit for exactly that reason: the gates cannot have been part of the
-patch, because admission rejects a protected path before sealing.
+Which paths change is the point. The *harness* is protected: `scripts/test.sh`,
+`scripts/consume-php-policy`, `scripts/generate-policy-lua`,
+`scripts/check-public-language.sh`, the sealing and merge scripts, `test/`,
+`autorelease/`, and `.github/workflows/`. The *product* is `hooks/*.lua`,
+`lib/`, `metadata.lua`, and the generated `support-snapshot.json`; automation
+writes only the snapshot and `lib/policy.lua`, and every other product change
+arrives by reviewed pull request. `autorelease-consumer.yml` runs
+`./scripts/test.sh` from the sealed commit, which is safe because sealing
+rejects any protected path, so the gates cannot have been part of the patch.
 
 ```mermaid
 flowchart TD
   policy["Accepted php-bin policy commit and digest"] --> compare{"Snapshot differs?"}
-  compare -- "No" --> quiet["Quiet: no model call or mutation"]
-  compare -- "Yes" --> plan["Offline repository-scoped Codex plan"]
-  plan --> admit["Deterministic admission"]
-  admit --> patch["Offline admitted implementation"]
+  compare -- "No" --> quiet["Quiet: nothing synchronized or mutated"]
+  compare -- "Yes" --> plan["Bind plan to the exact captured policy"]
+  plan --> patch["Regenerate snapshot and lib/policy.lua"]
   patch --> seal["Seal paths and digests"]
   seal --> test["Clean macOS arm64 plugin tests"]
   test --> ready["Commit exact mise_ready record"]
@@ -55,13 +60,14 @@ so a failure confined to the consumer workflow reaches the owner through the
 GitHub Actions failure email alone, until `php-bin` records it against the
 action key.
 
+There is no repair phase: a failed step stops the run and retains its log, and
+the next scheduled run starts again from the same captured state.
+
 ```mermaid
 flowchart TD
-  phase["Consumer, agent, sealing, test, or readiness phase"] --> result{"Result"}
+  phase["Compare, synchronization, sealing, test, or readiness phase"] --> result{"Result"}
   result -- "Passed" --> state["Record exact evidence and state"]
-  result -- "Retryable" --> bounded["Bounded repair"]
-  result -- "Critical, repeated, or exhausted" --> stop["Stop mutation"]
-  bounded --> result
+  result -- "Failed" --> stop["Stop mutation"]
   stop --> issue["Assigned autorelease issue"]
   issue --> email["GitHub issue email"]
   stop --> actions["Actions failure email"]
@@ -72,7 +78,7 @@ flowchart TD
 Tracking a new PHP branch takes zero human input here. No matcher in this
 plugin is anchored to a major or minor version, so `8.6`, `9.0`, and `10.0`
 need no code change. When the accepted `php-bin` policy adds a branch, the
-admitted patch regenerates `support-snapshot.json` and `lib/policy.lua` from
+synchronization regenerates `support-snapshot.json` and `lib/policy.lua` from
 it, the plugin contract tests run against the sealed commit, and the exact
 `mise_ready` record commits under `readiness/`. That record merges without a
 reviewer because `readiness/` and `autorelease-events/` sit outside CODEOWNERS
@@ -88,7 +94,7 @@ release and checksum assets are immutable.
 
 Pause unattended mutation in the reviewed
 `php-bin/.github/autorelease-operator.json` control. Read-only capture and
-investigation remain available while paused. Resume through a reviewed change;
+comparison remain available while paused. Resume through a reviewed change;
 partial events continue only through the deterministic next transition.
 
 From a checkout containing both repositories:
@@ -104,12 +110,7 @@ From a checkout containing both repositories:
   --output ./verification-results
 ```
 
-Each repository's `scripts/test.sh` also validates every pinned Codex Action
-invocation, exact CLI version, and canonical `config.toml` loading against the
-reviewed offline contract in `.github/codex-action-contract.json` before
-exercising autorelease behavior.
-
 Inspect `support-snapshot.json`, `readiness/`, retained
 workflow artifacts, and the event's GitHub issue. Recovery corrects the cause
-and reruns the normal admitted path; it never disables checksum, policy,
+and reruns the normal path; it never disables checksum, policy,
 sealing, exact-SHA, or publication gates.
