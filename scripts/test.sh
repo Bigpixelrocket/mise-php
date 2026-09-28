@@ -144,7 +144,7 @@ export MISE_PHP_GITHUB_TOKEN="fixture-token-never-sent"
 export GITHUB_TOKEN="fixture-token-never-sent"
 REQUESTS="$ASSETS/requests.log"
 # Print the requests made since mark_requests last ran.
-mark_requests() { REQUEST_MARK="$(wc -l < "$REQUESTS" 2>/dev/null || echo 0)"; }
+mark_requests() { REQUEST_MARK="$({ wc -l < "$REQUESTS"; } 2>/dev/null || echo 0)"; }
 new_requests() { tail -n +"$((REQUEST_MARK + 1))" "$REQUESTS"; }
 mark_requests
 use_mise_home "$TEMP_DIR/mise"

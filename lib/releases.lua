@@ -33,15 +33,17 @@ end
 
 -- Explain a refused API call. Anonymous GitHub API calls share a small hourly
 -- limit per address, which shared CI runners exhaust. Names the variable in
--- use, never its value.
+-- use, never its value. Without either variable the request is not
+-- necessarily anonymous: mise adds its own GitHub token to api.github.com
+-- calls the plugin sends without one.
 local function refusal_message(status, token_variable)
     local text = "php release server returned HTTP " .. tostring(status)
     if token_variable ~= nil then
         return text .. ": GitHub rate limited or refused the token from " .. token_variable
     end
 
-    return text .. ": GitHub rate limited or refused this anonymous request;"
-        .. " set MISE_PHP_GITHUB_TOKEN (or GITHUB_TOKEN) to a GitHub token to raise the limit"
+    return text .. ": GitHub rate limited or refused this request, which carried no"
+        .. " MISE_PHP_GITHUB_TOKEN or GITHUB_TOKEN; set one to a GitHub token to raise the limit"
 end
 
 -- GET one URL. Only API metadata calls pass api = true, so only they may carry

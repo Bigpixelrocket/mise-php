@@ -97,6 +97,9 @@ export MISE_PHP_GITHUB_TOKEN="$(gh auth token)"
   GitHub redirects to other hosts, and never to a custom
   `MISE_PHP_API_BASE_URL`.
 - The plugin never prints or logs it.
+- With neither variable set, mise itself adds its own GitHub token, such as
+  `MISE_GITHUB_TOKEN` or `GITHUB_API_TOKEN`, to the plugin's `api.github.com`
+  calls, and only to those.
 
 Mise also reads the plugin from a repository declaration:
 
