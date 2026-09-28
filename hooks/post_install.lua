@@ -332,17 +332,35 @@ end
 -- extension, with the comments PIE wrote above it and the blank line before
 -- them. That happens after pie install rebuilds an extension an upgrade had
 -- commented out: PIE never sees commented lines and adds a line of its own.
-local function drop_superseded(items)
+-- An enabling line this install cannot load, such as a path into another
+-- install, supersedes the item only when the item cannot load either.
+local function drop_superseded(items, extension_dir)
+    -- Per extension: true when an active line loads here, false when active
+    -- lines exist but none loads, nil when none exists.
     local enabled = {}
     for _, item in ipairs(items) do
-        if item.extension ~= nil and not item.extension.commented and not item.off then
-            enabled[item.extension.name] = true
+        local extension = item.extension
+        if extension ~= nil and not extension.commented and not item.off then
+            enabled[extension.name] = enabled[extension.name]
+                or extension_available(extension.value, extension_dir)
         end
+    end
+
+    local function superseded(item)
+        local state = enabled[item.extension.name]
+        if state == nil then
+            return false
+        end
+        if state then
+            return true
+        end
+        local restored = parse_extension_line(restored_line(item.line))
+        return restored == nil or not extension_available(restored.value, extension_dir)
     end
 
     local kept = {}
     for _, item in ipairs(items) do
-        if item.off and enabled[item.extension.name] then
+        if item.off and superseded(item) then
             local pie_comments = false
             while is_pie_comment(kept[#kept] and kept[#kept].line) do
                 table.remove(kept)
@@ -376,7 +394,7 @@ end
 -- starts with it, as every carried file does after its first upgrade, the new
 -- defaults simply follow that line and no second copy is added.
 local function carried_ini(previous, source_name, root, extension_dir, manifest)
-    local items = drop_superseded(parse_items(previous))
+    local items = drop_superseded(parse_items(previous), extension_dir)
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
     local mentioned = {}
     local builtin = nil

@@ -390,6 +390,26 @@ if grep -F -e 'rebuild it with PIE' -e 'already enabled by another line' "$INI_8
   exit 1
 fi
 
+# A line that loads the extension from another install does not supersede one
+# mise-php turned off: that one loads in an install that bundles it, and the
+# other becomes the commented duplicate.
+OTHER_DEMO_NEW="extension=$INSTALLS/8.5.1-1/lib/php/extensions/demo_new.so"
+awk -v other="$OTHER_DEMO_NEW" '
+  $0 == "extension=demo_new" {
+    print "; not bundled with this build: rebuild it with PIE (pie install <package>)"
+    print ";extension=demo_new"
+    print other
+    next
+  }
+  { print }
+' "$INI_853" > "$INI_853.edited"
+mv "$INI_853.edited" "$INI_853"
+mise install php@8.5.2
+INI_852="$INSTALLS/8.5.2/bin/php.ini"
+test "$(count_lines 'extension=demo_new' "$INI_852")" = 1
+grep -A1 -Fx '; already enabled by another line in this file: PHP warns when it loads one twice' "$INI_852" \
+  | grep -Fx ";$OTHER_DEMO_NEW"
+
 # No request to the mock server carried the token.
 if grep -F 'auth=yes' "$REQUESTS"; then
   echo "A request to a server other than api.github.com carried the GitHub token." >&2

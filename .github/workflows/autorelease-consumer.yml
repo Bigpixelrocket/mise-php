@@ -480,8 +480,10 @@ jobs:
           url="$(gh pr create --base main --head "autorelease/readiness-${{ github.run_id }}" \
             --title "$title" \
             --body "Deterministic readiness record for the exact synchronized mise-php commit.")"
+          number="${url##*/}"
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
           {
-            echo "number=${url##*/}"
+            echo "number=$number"
             echo "base_sha=$base"
             echo "head_sha=$(git rev-parse HEAD)"
             echo "record=readiness/$filename"
