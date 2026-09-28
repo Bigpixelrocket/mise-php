@@ -7,8 +7,8 @@ takes part in any step.
 
 The scheduled `php-bin policy consumer` captures the accepted public
 `support-policy.json` and compares it with `support-snapshot.json`: the policy
-digest, the invariants digest, the php-bin policy commit, the maintained
-branches, and any locally incomplete event. It does not fetch or classify
+digest, the invariants digest, the php-bin policy commit, and the maintained
+branches. It does not fetch or classify
 upstream PHP lifecycle data. The run stops before that capture unless every
 path in `autorelease/shared-files.json` is byte-identical with `php-bin` at the
 exact commit the operator control was read from. When the exact policy
@@ -20,8 +20,9 @@ and php-bin operator state, and it admits exactly two paths.
 `scripts/consume-php-policy synchronize` then regenerates
 `support-snapshot.json` from the captured policy and `scripts/generate-policy-lua`
 regenerates `lib/policy.lua` from the snapshot. A policy change without a
-lifecycle key (a hand-edited `bootstrap` policy), a paused operator, or a
-capture whose bytes or commits disagree stops the run.
+lifecycle key (a hand-edited `bootstrap` policy), or a capture whose bytes or
+commits disagree, fails the run. A paused operator leaves the run read-only:
+it captures and compares, then synchronizes nothing.
 
 Which paths change is the point. The *harness* is protected: `scripts/test.sh`,
 `scripts/consume-php-policy`, `scripts/generate-policy-lua`,

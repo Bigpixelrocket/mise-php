@@ -454,8 +454,14 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 subprocess.run(["git", *arguments], cwd=repo, check=True)
             base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True,
                                   stdout=subprocess.PIPE).stdout.strip()
-            branches = [*json.loads((project / "support-snapshot.json").read_text())["maintainedBranches"], "8.6"]
-            manifest, decision = self.capture_fixture(root, branches)
+            # validate runs this suite at every sealed commit the consumer produces, so the
+            # added branch is derived from the live snapshot rather than named: a snapshot
+            # that already lists 8.6 must not make the fixture policy non-canonical.
+            maintained = json.loads((project / "support-snapshot.json").read_text())["maintainedBranches"]
+            major, minor = maintained[-1].split(".")
+            added = f"{major}.{int(minor) + 1}"
+            branches = [*maintained, added]
+            manifest, decision = self.capture_fixture(root, branches, f"new_branch:{added}")
             plan = synchronization_plan(decision, manifest, base, "e" * 40, "enabled")
             synchronize(plan, root / "support-policy.json", repo / "support-snapshot.json")
             subprocess.run([str(repo / "scripts/generate-policy-lua")], check=True)
@@ -463,7 +469,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             self.assertEqual(
                 ["lib/policy.lua", "support-snapshot.json"], [item["path"] for item in sealed["files"]]
             )
-            self.assertIn('"8.6",', (repo / "lib/policy.lua").read_text())
+            self.assertIn(f'"{added}",', (repo / "lib/policy.lua").read_text())
 
     def generated_policy_lua(self, branches):
         return (

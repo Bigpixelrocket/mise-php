@@ -37,7 +37,7 @@ jobs:
           sparse-checkout: |
             .github/autorelease-operator.json
           persist-credentials: false
-      - name: Bind investigation to the live operator control
+      - name: Bind the run to the live operator control
         id: operator
         run: |
           operator="php-operator-control/.github/autorelease-operator.json"
