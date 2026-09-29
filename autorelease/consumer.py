@@ -269,32 +269,44 @@ def readiness_state(
     - `superseded`: a valid record for this action names another policy commit or
       digest, because php-bin accepted a newer policy for the same action. The run
       replaces it through the normal readiness pull request, bound to this policy.
-    - `blocked`: the record is unreadable, malformed, not ready, or names another
-      action. Nothing automated wrote it, so replacing it could override a
-      deliberate owner edit; the run raises it for the owner instead.
+    - `blocked`: the record is not a regular file, unreadable, malformed, not
+      ready, or names another action. Nothing automated wrote it, so replacing it
+      could override a deliberate owner edit; the run raises it for the owner
+      instead.
 
     `record` is the record's repository path, `problem` says what is wrong with a
     blocked record and `recordDigest` identifies its exact bytes, and `mismatched`
-    lists the binding fields a superseded record names differently. Exact-commit semantics are unchanged: only a record bound to
-    this exact policy is `recorded`, and php-bin reads nothing else as ready.
+    lists the binding fields a superseded record names differently. Exact-commit
+    semantics are unchanged: only a record bound to this exact policy is
+    `recorded`, and php-bin reads nothing else as ready.
     """
     if action_key == "bootstrap":
         return {"state": "not_required"}
     path = readiness_dir / action_filename(action_key)
     result: dict[str, Any] = {"record": f"readiness/{path.name}"}
+    # A symlink or directory at the record's path is nothing automation writes, and
+    # its bytes cannot be read the way a record's are; its digest is of no bytes.
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return {
+            **result,
+            "state": "blocked",
+            "problem": "readiness record is not a regular file",
+            "recordDigest": digest(b""),
+        }
     if not path.exists():
         return {**result, "state": "missing"}
+    content = path.read_bytes()
     try:
-        record = json.loads(path.read_text())
+        record = json.loads(content.decode("utf-8"))
         check_readiness_record(record)
         if record["actionKey"] != action_key:
             raise ConsumerError("readiness record names another action key")
-    except (OSError, ValueError, ConsumerError) as error:
+    except (ValueError, ConsumerError) as error:
         return {
             **result,
             "state": "blocked",
             "problem": str(error),
-            "recordDigest": digest(path.read_bytes()),
+            "recordDigest": digest(content),
         }
     expected = {
         "phpBinPolicyCommit": php_bin_commit,

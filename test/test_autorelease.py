@@ -146,6 +146,28 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             result = compare(policy, invariants, commit, snapshot, readiness_dir)
             self.assertEqual("readiness_blocked", result["trigger"])
             self.assertIn("problem", result["readiness"])
+            (readiness_dir / "new_branch-8.6.json").write_bytes(b"\xff\xfe{}\n")
+            result = compare(policy, invariants, commit, snapshot, readiness_dir)
+            self.assertEqual("readiness_blocked", result["trigger"])
+            self.assertEqual(digest(b"\xff\xfe{}\n"), result["readiness"]["recordDigest"])
+
+            # A symlink or directory in the record's place is blocked too, and never
+            # read through or crashes the comparison.
+            (readiness_dir / "new_branch-8.6.json").unlink()
+            write(root / "elsewhere.json", record)
+            place = readiness_dir / "new_branch-8.6.json"
+            for make, remove in (
+                (lambda: place.symlink_to(root / "elsewhere.json"), place.unlink),
+                (lambda: place.symlink_to(root / "missing.json"), place.unlink),
+                (place.mkdir, place.rmdir),
+            ):
+                make()
+                result = compare(policy, invariants, commit, snapshot, readiness_dir)
+                self.assertEqual("readiness_blocked", result["trigger"])
+                self.assertEqual("readiness record is not a regular file", result["readiness"]["problem"])
+                self.assertEqual(digest(b""), result["readiness"]["recordDigest"])
+                remove()
+            write(place, record)
 
             # A policy change still synchronizes first, whatever the record says.
             (readiness_dir / "new_branch-8.6.json").unlink()
@@ -171,7 +193,13 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         # One issue per record, found by its exact title, and a comment only when the
         # record bytes or the policy it should match changed.
         self.assertIn('title="Readiness record needs owner review: $record"', job)
-        self.assertIn('select(.title == $title)', job)
+        self.assertIn('select(.pull_request == null and .title == $title and .user.login == $bot)', job)
+        # The repository is public: only issues and comments this workflow wrote
+        # count, over every page.
+        self.assertIn('bot="github-actions[bot]"', job)
+        self.assertIn('select(.user.login == $bot) | .body', job)
+        self.assertEqual(2, job.count("gh api --paginate"))
+        self.assertNotIn("--limit", job)
         self.assertIn('fingerprint="$record_digest for policy $policy_commit"', job)
         self.assertLess(job.index('grep -Fq "$fingerprint"'), job.index("gh issue comment"))
         self.assertNotIn("exit 1", job)

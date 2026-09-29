@@ -186,14 +186,24 @@ jobs:
             + "Fix or delete the record in a reviewed pull request. With no record, the "
             + "next consumer run records readiness for the current policy.\n\n"
             + "Fingerprint: `\($fingerprint)`"' "$decision" > autorelease-run/blocked-readiness.md
-          number="$(gh issue list --state open --limit 100 --json number,title \
-            | jq -r --arg title "$title" '[.[] | select(.title == $title)][0].number // empty')"
+          # This repository is public, so anyone can open an issue with this title or
+          # comment a fingerprint. Only issues and comments this workflow wrote
+          # count, read over every page rather than the newest ones.
+          bot="github-actions[bot]"
+          number="$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" \
+            | jq -rs --arg title "$title" --arg bot "$bot" \
+              '[.[][] | select(.pull_request == null and .title == $title and .user.login == $bot)][0].number // empty')"
           if [[ -z "$number" ]]; then
             assignee=()
             if [[ -n "$OWNER" ]]; then assignee=(--assignee "$OWNER"); fi
             gh issue create --title "$title" --body-file autorelease-run/blocked-readiness.md "${assignee[@]}"
           else
-            reported="$(gh issue view "$number" --json body,comments --jq '[.body, .comments[].body] | join("\n")')"
+            [[ "$number" =~ ^[1-9][0-9]*$ ]]
+            reported="$(
+              gh api "repos/$GH_REPO/issues/$number" --jq .body
+              gh api --paginate "repos/$GH_REPO/issues/$number/comments?per_page=100" \
+                | jq -rs --arg bot "$bot" '.[][] | select(.user.login == $bot) | .body'
+            )"
             if grep -Fq "$fingerprint" <<< "$reported"; then
               echo "Issue #$number already reports this record."
             else
