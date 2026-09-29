@@ -28,8 +28,7 @@ ACTION_KEY_RE = re.compile(
     r"^(new_patch:\d+\.\d+\.\d+|new_branch:\d+\.\d+|"
     r"branch_eol:\d+\.\d+:\d{4}-\d{2}-\d{2}|"
     r"recipe_rebuild:\d+\.\d+\.\d+:[1-9]\d*|"
-    r"repair:\d+\.\d+\.\d+:[0-9a-f]{8,64}|"
-    r"(?:source_unhealthy|health_failed|policy_failure|auth_failure):[0-9a-f]{8,64})$"
+    r"(?:source_unhealthy|health_failed|policy_failure):[0-9a-f]{8,64})$"
 )
 POLICY_COMMIT_SELECTOR_URL = (
     "https://api.github.com/repos/bigpixelrocket/php-bin/commits"
@@ -41,6 +40,15 @@ POLICY_CAPTURE_IDS = frozenset({"php_bin_policy_selector", "php_bin_state", "sup
 # The only paths a synchronization writes: the snapshot, and the Lua policy table
 # scripts/generate-policy-lua derives from it.
 SYNCHRONIZED_PATHS = ["lib/policy.lua", "support-snapshot.json"]
+READINESS_RECORD_KEYS = frozenset({
+    "schemaVersion", "actionKey", "state", "ready", "phpBinPolicyCommit",
+    "policyDigest", "policyInvariantsDigest", "misePhpCommit",
+    "evidenceDigests", "recordedAt",
+})
+# The fields that bind a readiness record to one accepted policy. A record whose
+# other fields are valid but whose binding names another policy was written for a
+# policy that has since been superseded.
+READINESS_BINDING = ("phpBinPolicyCommit", "policyDigest", "policyInvariantsDigest")
 SNAPSHOT_FIELDS = (
     "schemaVersion",
     "phpBinPolicyCommit",
@@ -211,44 +219,139 @@ def fetch_policy_set(
     ]
 
 
-def pending_readiness(
+def check_readiness_record(record: Any) -> None:
+    """Exact-shape check for records produced by readiness().
+
+    Raises ConsumerError naming the first problem. The merge gate and the
+    comparison both use it, so a record either repository could write back is
+    judged the same way everywhere.
+    """
+    if not isinstance(record, dict) or set(record) != READINESS_RECORD_KEYS:
+        raise ConsumerError("readiness record has unexpected shape")
+    if record["schemaVersion"] != 1 or record["state"] != "mise_ready" or record["ready"] is not True:
+        raise ConsumerError("readiness record has invalid state")
+    if not ACTION_KEY_RE.fullmatch(str(record["actionKey"])):
+        raise ConsumerError("readiness record has invalid action key")
+    for key in ("phpBinPolicyCommit", "misePhpCommit"):
+        if not re.fullmatch(r"[0-9a-f]{40}", str(record[key])):
+            raise ConsumerError(f"readiness record {key} is not an exact SHA")
+    for key in ("policyDigest", "policyInvariantsDigest"):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(record[key])):
+            raise ConsumerError(f"readiness record {key} is not a digest")
+    digests = record["evidenceDigests"]
+    if (
+        not isinstance(digests, list)
+        or not digests
+        or digests != sorted(digests)
+        or not all(isinstance(item, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", item) for item in digests)
+    ):
+        raise ConsumerError("readiness record evidence digests are invalid")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(record["recordedAt"])):
+        raise ConsumerError("readiness record timestamp is invalid")
+
+
+def readiness_state(
     action_key: str,
     php_bin_commit: str,
     policy_digest: str,
     policy_invariants_digest: str,
     readiness_dir: pathlib.Path,
-) -> bool:
-    """Report whether a synchronized lifecycle policy still lacks its readiness record.
+) -> dict[str, Any]:
+    """Classify the readiness record for a synchronized lifecycle policy.
 
     A synchronization merges the snapshot first and records readiness afterwards, in a
-    separate pull request. A run that stops between the two leaves the snapshot current
-    and no record, so every later comparison would be quiet while php-bin waits for the
-    record without end. This is the check that notices: True means the record is
-    missing and the run must write it. A `bootstrap` policy needs no record. A record
-    that exists but names another policy fails the run, since php-bin would reject it.
+    separate pull request, so a run that stops between the two leaves the snapshot
+    current with no matching record. The returned `state` is:
+
+    - `not_required`: a `bootstrap` policy needs no record.
+    - `recorded`: the record is valid and bound to exactly this policy.
+    - `missing`: there is no record; the run must write it.
+    - `superseded`: a valid record for this action names another policy commit or
+      digest, because php-bin accepted a newer policy for the same action. The run
+      replaces it through the normal readiness pull request, bound to this policy.
+    - `blocked`: the record is not a regular file, unreadable, malformed, not
+      ready, or names another action. Nothing automated wrote it, so replacing it
+      could override a deliberate owner edit; the run raises it for the owner
+      instead.
+
+    `record` is the record's repository path, `problem` says what is wrong with a
+    blocked record and `recordDigest` identifies its exact bytes, or no bytes when
+    it is not a regular file or cannot be read, and `mismatched` lists the binding
+    fields a superseded record names differently. Exact-commit
+    semantics are unchanged: only a record bound to this exact policy is
+    `recorded`, and php-bin reads nothing else as ready.
     """
     if action_key == "bootstrap":
-        return False
+        return {"state": "not_required"}
     path = readiness_dir / action_filename(action_key)
+    result: dict[str, Any] = {"record": f"readiness/{path.name}"}
+    # A symlink or directory at the record's path is nothing automation writes, and
+    # its bytes cannot be read the way a record's are; its digest, like that of a
+    # record that cannot be read, is of no bytes.
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return {
+            **result,
+            "state": "blocked",
+            "problem": "readiness record is not a regular file",
+            "recordDigest": digest(b""),
+        }
     if not path.exists():
-        return True
-    record = load(path)
+        return {**result, "state": "missing"}
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        return {
+            **result,
+            "state": "blocked",
+            "problem": f"readiness record cannot be read: {error.strerror}",
+            "recordDigest": digest(b""),
+        }
+    try:
+        record = json.loads(content.decode("utf-8"))
+        check_readiness_record(record)
+        if record["actionKey"] != action_key:
+            raise ConsumerError("readiness record names another action key")
+    except (ValueError, ConsumerError) as error:
+        return {
+            **result,
+            "state": "blocked",
+            "problem": str(error),
+            "recordDigest": digest(content),
+        }
     expected = {
-        "actionKey": action_key,
-        "state": "mise_ready",
-        "ready": True,
         "phpBinPolicyCommit": php_bin_commit,
         "policyDigest": policy_digest,
         "policyInvariantsDigest": policy_invariants_digest,
     }
-    mismatched = sorted(
-        key for key, value in expected.items() if not isinstance(record, dict) or record.get(key) != value
-    )
+    mismatched = [key for key in READINESS_BINDING if record[key] != expected[key]]
     if mismatched:
-        raise ConsumerError(
-            f"readiness record {path.name} does not match the synchronized policy: {', '.join(mismatched)}"
-        )
-    return False
+        return {**result, "state": "superseded", "mismatched": mismatched}
+    return {**result, "state": "recorded"}
+
+
+def same_readiness(existing: Any, candidate: Any) -> None:
+    """Prove an existing record states exactly what a fresh one for this run would.
+
+    A rerun of the job that records readiness finds the branch its earlier attempt
+    pushed. It may reuse that branch only when the record there is valid and equal to
+    the one it would write now in every field but `recordedAt`; anything else is not
+    this run's record, and the rerun stops rather than rewrite a branch.
+    """
+    check_readiness_record(existing)
+    check_readiness_record(candidate)
+    differing = sorted(
+        key for key in READINESS_RECORD_KEYS - {"recordedAt"} if existing[key] != candidate[key]
+    )
+    if differing:
+        raise ConsumerError(f"existing readiness record differs from this run's: {', '.join(differing)}")
+
+
+# Each readiness state maps to the comparison trigger the consumer workflow acts on.
+READINESS_TRIGGERS = {
+    "missing": "readiness_pending",
+    "superseded": "readiness_superseded",
+    "blocked": "readiness_blocked",
+}
 
 
 def compare(
@@ -260,10 +363,12 @@ def compare(
 ) -> dict[str, Any]:
     """Compare the captured policy with the local snapshot and name the next step.
 
-    The trigger is `policy_changed` when the snapshot must be synchronized,
-    `readiness_pending` when the snapshot is current but its lifecycle action has no
-    readiness record in `readiness_dir`, and `quiet` otherwise. Without
-    `readiness_dir` the readiness record is not consulted.
+    The trigger is `policy_changed` when the snapshot must be synchronized. When the
+    snapshot is current, the readiness record in `readiness_dir` decides:
+    `readiness_pending` when the lifecycle action has no record, `readiness_superseded`
+    when its record is bound to an earlier policy, `readiness_blocked` when its record
+    needs the owner, and `quiet` otherwise; the decision then carries the record's
+    `readiness` state. Without `readiness_dir` the record is not consulted.
     """
     policy_digest = digest(policy.read_bytes())
     policy_document = load(policy)
@@ -353,13 +458,14 @@ def compare(
         or existing.get("maintainedBranches") != branches
     ):
         trigger = "policy_changed"
-    elif readiness_dir is not None and pending_readiness(
-        policy_action, commit_sha, policy_digest, invariants_digest, readiness_dir
-    ):
-        trigger = "readiness_pending"
+        state = None
+    elif readiness_dir is not None:
+        state = readiness_state(policy_action, commit_sha, policy_digest, invariants_digest, readiness_dir)
+        trigger = READINESS_TRIGGERS.get(state["state"], "quiet")
     else:
         trigger = "quiet"
-    return {
+        state = None
+    decision = {
         "schemaVersion": 1,
         "trigger": trigger,
         "actionKey": policy_document.get("actionKey"),
@@ -368,6 +474,9 @@ def compare(
         "phpBinPolicyCommit": commit_sha,
         "synchronize": trigger == "policy_changed",
     }
+    if state is not None:
+        decision["readiness"] = state
+    return decision
 
 
 def _captured_body(capture_manifest: pathlib.Path, capture: dict[str, Any]) -> pathlib.Path:
@@ -561,6 +670,9 @@ def main() -> int:
     sync.add_argument("--plan", required=True, type=pathlib.Path)
     sync.add_argument("--policy", required=True, type=pathlib.Path)
     sync.add_argument("--snapshot", required=True, type=pathlib.Path)
+    same = sub.add_parser("same-readiness")
+    same.add_argument("--existing", required=True, type=pathlib.Path)
+    same.add_argument("--candidate", required=True, type=pathlib.Path)
     filename = sub.add_parser("action-filename")
     filename.add_argument("action_key")
     filename.add_argument("--suffix", default=".json")
@@ -586,6 +698,8 @@ def main() -> int:
             print(json.dumps(result))
         elif args.command == "synchronize":
             print(json.dumps(synchronize(load(args.plan), args.policy, args.snapshot)))
+        elif args.command == "same-readiness":
+            same_readiness(load(args.existing), load(args.candidate))
         elif args.command == "action-filename":
             print(action_filename(args.action_key, args.suffix))
         elif args.command == "compare":

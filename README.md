@@ -148,16 +148,29 @@ have starts from your newest *other* install of that branch, so edits made only
 in the reinstalled version are replaced.
 
 The copy keeps exactly one active line per extension, and marks every line it
-changes with a comment directly above it:
+changes with a comment directly above it that names the extension:
 
 - An extension the new install lacks is commented out. If the new `bin/php`
   has that module built in, which is the case for releases built before shared
   extensions, the note says so; otherwise it says to rebuild it with PIE.
 - A line commented out that way becomes active again in a later install that
-  has the extension.
+  has the extension. Only the line directly below its note, in exactly the
+  form mise-php wrote it, counts: remove a note together with its line, and a
+  line of yours that ends up below a note is left as you wrote it.
 - A second active line for the same extension is commented out.
 - A commented line for an extension another line enables is marked
   `keep this one commented`.
+
+Extensions a new install bundles that the old file never mentioned join the
+list under `; Bundled shared extensions`. A file carried forward by an earlier
+release can hold a second such header over the extensions that copy added. The
+copy keeps only the first header and drops the second with the blank line above
+it, so where the two lists follow each other they become one. The copy reads
+`php.ini` the way PHP does: a value in double or single quotes can span several
+lines, and so can an unquoted value that contains an apostrophe, up to the next
+apostrophe in the file. Lines inside such a value are left exactly as they are,
+even ones that look like `extension=` lines, because PHP does not read them as
+settings.
 
 ### Building your own extensions
 
@@ -174,6 +187,10 @@ PIE builds the extension into that install's `lib/php/extensions` and adds its
 line to the end of that install's `php.ini`. Extensions you build are never
 copied to another install: after a patch upgrade their lines are commented out
 with a note, and `pie install` builds them again for the new install.
+
+PIE reads `php.ini` one line at a time, so it stops with a syntax error, after
+building the extension but before adding its line, when a value in `php.ini`
+spans several lines. Add the `extension=` line yourself in that case.
 
 PIE ignores commented lines, so it adds a line of its own even when `php.ini`
 already has a commented line for that extension. Two ways keep this clean:
