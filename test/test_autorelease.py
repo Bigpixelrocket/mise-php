@@ -1,4 +1,5 @@
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -111,13 +112,40 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             write(readiness_dir / "new_branch-8.6.json", record)
             self.assertEqual("quiet", compare(policy, invariants, commit, snapshot, readiness_dir)["trigger"])
 
-            # A record for the same action that names another policy fails loudly.
-            write(readiness_dir / "new_branch-8.6.json", {**record, "policyDigest": "sha256:" + "0" * 64})
-            with self.assertRaisesRegex(ConsumerError, "does not match the synchronized policy: policyDigest"):
-                compare(policy, invariants, commit, snapshot, readiness_dir)
-            write(readiness_dir / "new_branch-8.6.json", {**record, "ready": False})
-            with self.assertRaisesRegex(ConsumerError, "ready"):
-                compare(policy, invariants, commit, snapshot, readiness_dir)
+            # A valid record for this action bound to an earlier policy commit or digest
+            # is superseded: the run replaces it through the normal readiness path
+            # rather than failing every day.
+            for key, value in (
+                ("phpBinPolicyCommit", "b" * 40),
+                ("policyDigest", "sha256:" + "0" * 64),
+                ("policyInvariantsDigest", "sha256:" + "1" * 64),
+            ):
+                write(readiness_dir / "new_branch-8.6.json", {**record, key: value})
+                result = compare(policy, invariants, commit, snapshot, readiness_dir)
+                self.assertEqual("readiness_superseded", result["trigger"], key)
+                self.assertEqual([key], result["readiness"]["mismatched"])
+                self.assertEqual("readiness/new_branch-8.6.json", result["readiness"]["record"])
+                self.assertFalse(result["synchronize"])
+
+            # A record automation could not have written is never replaced: the run
+            # raises it for the owner once instead.
+            for corrupt in (
+                {**record, "ready": False},
+                {**record, "state": "published"},
+                {**record, "actionKey": "new_branch:8.7"},
+                {**record, "extra": 1},
+            ):
+                write(readiness_dir / "new_branch-8.6.json", corrupt)
+                result = compare(policy, invariants, commit, snapshot, readiness_dir)
+                self.assertEqual("readiness_blocked", result["trigger"], corrupt)
+                self.assertEqual(
+                    digest((readiness_dir / "new_branch-8.6.json").read_bytes()),
+                    result["readiness"]["recordDigest"],
+                )
+            (readiness_dir / "new_branch-8.6.json").write_text("{not json\n")
+            result = compare(policy, invariants, commit, snapshot, readiness_dir)
+            self.assertEqual("readiness_blocked", result["trigger"])
+            self.assertIn("problem", result["readiness"])
 
             # A policy change still synchronizes first, whatever the record says.
             (readiness_dir / "new_branch-8.6.json").unlink()
@@ -126,11 +154,33 @@ class AutoreleaseConsumerTests(unittest.TestCase):
 
     def test_bootstrap_policy_needs_no_readiness_record(self):
         with tempfile.TemporaryDirectory() as temporary:
-            self.assertFalse(
-                consumer.pending_readiness(
+            self.assertEqual(
+                {"state": "not_required"},
+                consumer.readiness_state(
                     "bootstrap", "a" * 40, "sha256:" + "b" * 64, "sha256:" + "c" * 64, pathlib.Path(temporary)
-                )
+                ),
             )
+
+    def test_blocked_readiness_raises_one_owner_issue_without_failing_the_run(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        job = workflow[workflow.index("\n  report-blocked-readiness:"):workflow.index("\n  synchronize:\n")]
+        self.assertIn("if: needs.compare.outputs.trigger == 'readiness_blocked'", job)
+        self.assertIn("issues: write", job)
+        self.assertNotIn("contents: write", job)
+        # One issue per record, found by its exact title, and a comment only when the
+        # record bytes or the policy it should match changed.
+        self.assertIn('title="Readiness record needs owner review: $record"', job)
+        self.assertIn('select(.title == $title)', job)
+        self.assertIn('fingerprint="$record_digest for policy $policy_commit"', job)
+        self.assertLess(job.index('grep -Fq "$fingerprint"'), job.index("gh issue comment"))
+        self.assertNotIn("exit 1", job)
+        # Only this job may write issues; the rest of the workflow stays without them.
+        self.assertEqual(1, workflow.count("issues: write"))
+        # A blocked record never reaches the readiness job.
+        resume = workflow[workflow.index("      - name: Resume a readiness record"):]
+        resume = resume[:resume.index("      - name:", 10)]
+        self.assertNotIn("readiness_blocked", resume)
 
     def test_consumer_resumes_pending_readiness_through_one_record_job(self):
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -138,7 +188,10 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertIn("--readiness-dir readiness", workflow)
         # Only a changed policy is planned; a pending record must not reach the plan.
         self.assertIn("if: steps.compare.outputs.trigger == 'policy_changed' &&", workflow)
-        self.assertIn("if: steps.compare.outputs.trigger == 'readiness_pending'", workflow)
+        resume = workflow[workflow.index("      - name: Resume a readiness record"):]
+        resume = resume[:resume.index("      - name:", 10)]
+        self.assertIn("steps.compare.outputs.trigger == 'readiness_pending'", resume)
+        self.assertIn("steps.compare.outputs.trigger == 'readiness_superseded'", resume)
         record_job = workflow[workflow.index("  record-readiness:"):]
         self.assertIn("needs.compare.outputs.resume == 'true'", record_job)
         self.assertIn("needs.merge-and-record-readiness.result == 'success'", record_job)
@@ -171,6 +224,60 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         for job in (merge_job, record_job):
             self.assertIn(".isCrossRepository == false", job)
             self.assertIn(".title == $title", job)
+
+    def test_readiness_rerun_reuses_only_its_own_branch_and_pull_request(self):
+        # A rerun after the job pushed its branch, with or without opening the pull
+        # request, reuses both instead of failing on the pushed branch or opening a
+        # second pull request. It reuses the branch only when it holds exactly this
+        # run's record on the same main, and never rewrites it.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        record_job = workflow[workflow.index("  record-readiness:"):]
+        step = record_job[record_job.index("      - name: Create readiness record"):]
+        step = step[:step.index("      - name: Validate and merge readiness record")]
+        self.assertIn('branch="autorelease/readiness-${{ github.run_id }}"', step)
+        self.assertIn('git ls-remote --exit-code --heads origin "refs/heads/$branch"', step)
+        self.assertIn('"$existing $base"', step)
+        self.assertIn('!= "$record" ]]', step)
+        self.assertIn("./scripts/consume-php-policy same-readiness", step)
+        self.assertLess(step.index("same-readiness"), step.index('git checkout -B "$branch" "$existing"'))
+        self.assertIn(".headRefName != $branch", step)
+        self.assertIn('git push origin "HEAD:refs/heads/$branch"', step)
+        self.assertNotIn("git push origin HEAD\n", step)
+        self.assertLess(step.index('gh pr list --head "$branch" --state open'), step.index("gh pr create"))
+        self.assertIn('if [[ -z "$number" ]]; then', step)
+
+    def test_same_readiness_accepts_only_the_record_this_run_would_write(self):
+        record = readiness(
+            "new_branch:8.6", "a" * 40, "sha256:" + "b" * 64, "sha256:" + "e" * 64, "c" * 40,
+            ["sha256:" + "d" * 64],
+        )
+        consumer.same_readiness({**record, "recordedAt": "2000-01-01T00:00:00Z"}, record)
+        for key, value in (
+            ("misePhpCommit", "f" * 40),
+            ("phpBinPolicyCommit", "f" * 40),
+            ("evidenceDigests", ["sha256:" + "0" * 64]),
+        ):
+            with self.assertRaisesRegex(ConsumerError, key):
+                consumer.same_readiness({**record, key: value}, record)
+        with self.assertRaises(ConsumerError):
+            consumer.same_readiness({**record, "ready": False}, record)
+        with tempfile.TemporaryDirectory() as temporary:
+            existing = pathlib.Path(temporary) / "existing.json"
+            candidate = pathlib.Path(temporary) / "candidate.json"
+            write(existing, {**record, "recordedAt": "2000-01-01T00:00:00Z"})
+            write(candidate, record)
+
+            def same():
+                return subprocess.run(
+                    ["./scripts/consume-php-policy", "same-readiness",
+                     "--existing", str(existing), "--candidate", str(candidate)],
+                    check=False, capture_output=True, text=True,
+                ).returncode
+
+            self.assertEqual(0, same())
+            write(existing, {**record, "misePhpCommit": "f" * 40})
+            self.assertEqual(1, same())
 
     def test_readiness_requires_exact_commits_and_digests(self):
         result = readiness(
@@ -216,14 +323,14 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 admission.validate_readiness_record(corrupt)
 
     def test_action_key_alphabet_and_filename_have_one_definition(self):
-        # admission and consumer both name files and branches from an action key; a
+        # admission and consumer both judge readiness records and their action keys; a
         # second copy of either rule drifts silently against php-bin.
         # re.compile caches by pattern, so identical copies are indistinguishable at
         # runtime; the single definition is only observable in the source.
         source = pathlib.Path("autorelease/admission.py").read_text()
-        self.assertIn("from autorelease.consumer import ACTION_KEY_RE", source)
+        self.assertIn("from autorelease.consumer import ConsumerError, check_readiness_record", source)
         self.assertNotIn("ACTION_KEY_RE = re.compile", source)
-        self.assertEqual(admission.ACTION_KEY_RE.pattern, consumer.ACTION_KEY_RE.pattern)
+        self.assertNotIn("READINESS_RECORD_KEYS", source)
         self.assertEqual(
             "branch_eol-8.2-2026-12-31.json", consumer.action_filename("branch_eol:8.2:2026-12-31")
         )
@@ -239,6 +346,42 @@ class AutoreleaseConsumerTests(unittest.TestCase):
         self.assertEqual("new_patch-8.5.9.json", result.stdout.strip())
         workflow = pathlib.Path(".github/workflows/autorelease-consumer.yml").read_text()
         self.assertNotIn("tr ':/'", workflow)
+
+    def test_unused_action_key_families_are_rejected(self):
+        # Nothing in this repository reads a repair or auth_failure key from php-bin:
+        # the consumer only ever sees the policy's own lifecycle key. Neither family
+        # names a record here, and a readiness record carrying one is invalid.
+        for action_key in ("repair:8.5.9:deadbeef", "auth_failure:deadbeef"):
+            with self.assertRaises(ConsumerError, msg=action_key):
+                consumer.action_filename(action_key)
+            with self.assertRaises(ConsumerError, msg=action_key):
+                readiness(action_key, "a" * 40, "sha256:" + "b" * 64, "sha256:" + "c" * 64, "d" * 40,
+                          ["sha256:" + "e" * 64])
+            result = subprocess.run(
+                ["./scripts/consume-php-policy", "action-filename", action_key],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(1, result.returncode, action_key)
+        for action_key in (
+            "new_patch:8.5.9", "new_branch:8.6", "branch_eol:8.2:2026-12-31", "recipe_rebuild:8.5.9:2",
+            "source_unhealthy:deadbeef", "health_failed:deadbeef", "policy_failure:deadbeef",
+        ):
+            consumer.action_filename(action_key)
+
+    def test_pull_request_bodies_use_real_newlines(self):
+        # gh passes --body through verbatim, so a "\n" inside a double-quoted shell
+        # string reaches the pull request as a backslash and an n.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for path in (root / ".github/workflows").glob("*.yml"):
+            for match in re.finditer(r'--body "((?:[^"\\]|\\.)*)"', path.read_text()):
+                self.assertNotIn("\\n", match.group(1), path.name)
+        workflow = (root / ".github/workflows/autorelease-consumer.yml").read_text()
+        line = next(line.strip() for line in workflow.splitlines() if line.strip().startswith('body="$(printf'))
+        rendered = subprocess.run(
+            ["bash", "-c", f'validated=abc123; {line}; printf "%s" "$body"'],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        self.assertEqual("Deterministically sealed mise-php autorelease patch.\n\nValidated commit: `abc123`.", rendered)
 
     def test_protected_controls_are_not_admissible(self):
         self.assertTrue(protected(".github/workflows/autorelease-consumer.yml"))

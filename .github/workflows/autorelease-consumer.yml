@@ -95,10 +95,14 @@ jobs:
       # A run that merged the synchronization but stopped before its readiness record
       # merged leaves the snapshot current and no record, and php-bin waits for that
       # record. The comparison reports readiness_pending, and this run records it at
-      # the current main commit, which carries the synchronized snapshot.
-      - name: Resume a readiness record an earlier run left unrecorded
+      # the current main commit, which carries the synchronized snapshot. A record
+      # bound to an earlier policy for the same action is readiness_superseded and
+      # is replaced the same way, by a record bound to the exact current policy.
+      - name: Resume a readiness record an earlier run left unrecorded or superseded
         id: resume
-        if: steps.compare.outputs.trigger == 'readiness_pending'
+        if: >-
+          steps.compare.outputs.trigger == 'readiness_pending' ||
+          steps.compare.outputs.trigger == 'readiness_superseded'
         env:
           OPERATOR_STATE: ${{ steps.operator.outputs.state }}
         run: |
@@ -134,6 +138,69 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
+
+  # A readiness record automation could not have written, one that is unreadable,
+  # malformed, not ready, or names another action, is never replaced: it may be a
+  # deliberate owner edit. The run raises it as one assigned issue per record and
+  # stays green, so the owner hears about it once instead of through a failed run
+  # every day. The issue gains a comment only when the record bytes or the policy
+  # it should match change.
+  report-blocked-readiness:
+    name: Raise a readiness record that needs the owner
+    needs: compare
+    if: needs.compare.outputs.trigger == 'readiness_blocked'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: mise-autorelease-comparison-${{ github.run_id }}
+          path: autorelease-run
+      - name: Open or update the one issue for this record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ vars.AUTORELEASE_OWNER }}
+        run: |
+          decision=autorelease-run/decision.json
+          record="$(jq -r .readiness.record "$decision")"
+          [[ "$record" =~ ^readiness/[A-Za-z0-9._-]+\.json$ ]]
+          record_digest="$(jq -r .readiness.recordDigest "$decision")"
+          policy_commit="$(jq -r .phpBinPolicyCommit "$decision")"
+          policy_digest="$(jq -r .policyDigest "$decision")"
+          [[ "$record_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$policy_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$policy_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          fingerprint="$record_digest for policy $policy_commit"
+          title="Readiness record needs owner review: $record"
+          jq -r --arg fingerprint "$fingerprint" '
+            "`\(.readiness.record)` on `main` blocks the readiness php-bin waits for, and "
+            + "the consumer will not replace a record it could not have written.\n\n"
+            + "- Problem: \(.readiness.problem)\n"
+            + "- Action: `\(.actionKey)`\n"
+            + "- Policy: `\(.phpBinPolicyCommit)` (`\(.policyDigest)`)\n"
+            + "- Record: `\(.readiness.recordDigest)`\n\n"
+            + "Fix or delete the record in a reviewed pull request. With no record, the "
+            + "next consumer run records readiness for the current policy.\n\n"
+            + "Fingerprint: `\($fingerprint)`"' "$decision" > autorelease-run/blocked-readiness.md
+          number="$(gh issue list --state open --limit 100 --json number,title \
+            | jq -r --arg title "$title" '[.[] | select(.title == $title)][0].number // empty')"
+          if [[ -z "$number" ]]; then
+            assignee=()
+            if [[ -n "$OWNER" ]]; then assignee=(--assignee "$OWNER"); fi
+            gh issue create --title "$title" --body-file autorelease-run/blocked-readiness.md "${assignee[@]}"
+          else
+            reported="$(gh issue view "$number" --json body,comments --jq '[.body, .comments[].body] | join("\n")')"
+            if grep -Fq "$fingerprint" <<< "$reported"; then
+              echo "Issue #$number already reports this record."
+            else
+              gh issue comment "$number" --body-file autorelease-run/blocked-readiness.md
+            fi
+          fi
+          echo "::warning::$record needs owner review; see the open issue titled \"$title\"."
 
   synchronize:
     name: Deterministic snapshot synchronization and sealing
@@ -310,8 +377,8 @@ jobs:
           git push origin "HEAD:refs/heads/$branch"
           number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -z "$number" ]]; then
-            url="$(gh pr create --base main --head "$branch" --title "$title" \
-              --body "Deterministically sealed mise-php autorelease patch.\n\nValidated commit: \`$validated\`.")"
+            body="$(printf 'Deterministically sealed mise-php autorelease patch.\n\nValidated commit: %s.' "\`$validated\`")"
+            url="$(gh pr create --base main --head "$branch" --title "$title" --body "$body")"
             number="${url##*/}"
           fi
           [[ "$number" =~ ^[1-9][0-9]*$ ]]
@@ -434,6 +501,10 @@ jobs:
         with:
           name: mise-autorelease-comparison-${{ github.run_id }}
           path: autorelease-run
+      # A rerun of this job after its earlier attempt pushed the branch, with or
+      # without opening the pull request, reuses that branch and pull request: the
+      # branch is named for this run, holds one commit on the same main, and its
+      # record states what this attempt would write. Nothing rewrites it.
       - name: Create readiness record at the synchronized commit
         id: readiness
         env:
@@ -446,10 +517,12 @@ jobs:
           [[ "$READY_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$READY_COMMIT"
-          git checkout -B autorelease/readiness-${{ github.run_id }} origin/main
+          branch="autorelease/readiness-${{ github.run_id }}"
+          git checkout -B "$branch" origin/main
           base="$(git rev-parse HEAD)"
           mkdir -p readiness
           filename="$(./scripts/consume-php-policy action-filename "$action_key")"
+          record="readiness/$filename"
           mapfile -t digests < <(jq -r '.captures[].digest' autorelease-run/policy-capture.json)
           args=()
           for digest in "${digests[@]}"; do args+=(--evidence-digest "$digest"); done
@@ -460,34 +533,53 @@ jobs:
             --policy-invariants-digest "$(jq -r .policyInvariantsDigest autorelease-run/decision.json)" \
             --mise-commit "$READY_COMMIT" \
             "${args[@]}" \
-            --output "readiness/$filename"
-          git add "readiness/$filename"
-          git -c user.name=autorelease-readiness -c user.email=autorelease@invalid \
-            commit -m "chore: record $action_key readiness"
+            --output autorelease-run/readiness-candidate.json
           title="chore: record $action_key readiness"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            git fetch origin "refs/heads/$branch"
+            existing="$(git rev-parse FETCH_HEAD)"
+            if [[ "$(git rev-list --parents -n 1 "$existing")" != "$existing $base" ]] \
+              || [[ "$(git diff --name-only "$base" "$existing")" != "$record" ]]; then
+              echo "Branch $branch exists but is not one readiness commit on $base." >&2
+              exit 1
+            fi
+            git show "$existing:$record" > autorelease-run/readiness-existing.json
+            ./scripts/consume-php-policy same-readiness \
+              --existing autorelease-run/readiness-existing.json \
+              --candidate autorelease-run/readiness-candidate.json
+            git checkout -B "$branch" "$existing"
+          else
+            cp autorelease-run/readiness-candidate.json "$record"
+            git add "$record"
+            git -c user.name=autorelease-readiness -c user.email=autorelease@invalid \
+              commit -m "chore: record $action_key readiness"
+          fi
           # A readiness pull request only merges from the run that opened it, so one
           # an earlier run left open can never merge; close it so this one is the
           # only candidate.
           gh pr list --state open --limit 100 --json number,headRefName,title,isCrossRepository \
-            | jq -r --arg title "$title" \
-              '.[] | select(.isCrossRepository == false and .title == $title and (.headRefName | startswith("autorelease/readiness-"))) | .number' \
+            | jq -r --arg title "$title" --arg branch "$branch" \
+              '.[] | select(.isCrossRepository == false and .title == $title and .headRefName != $branch and (.headRefName | startswith("autorelease/readiness-"))) | .number' \
             | while read -r stale; do
                 gh pr close "$stale" --delete-branch \
                   --comment "Superseded by the readiness record from consumer run ${{ github.run_id }}."
               done
           gh auth setup-git
-          git push origin HEAD
-          url="$(gh pr create --base main --head "autorelease/readiness-${{ github.run_id }}" \
-            --title "$title" \
-            --body "Deterministic readiness record for the exact synchronized mise-php commit.")"
-          number="${url##*/}"
+          git push origin "HEAD:refs/heads/$branch"
+          number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            url="$(gh pr create --base main --head "$branch" \
+              --title "$title" \
+              --body "Deterministic readiness record for the exact synchronized mise-php commit.")"
+            number="${url##*/}"
+          fi
           [[ "$number" =~ ^[1-9][0-9]*$ ]]
           {
             echo "number=$number"
             echo "base_sha=$base"
             echo "head_sha=$(git rev-parse HEAD)"
-            echo "record=readiness/$filename"
-            echo "digest=sha256:$(shasum -a 256 "readiness/$filename" | awk '{print $1}')"
+            echo "record=$record"
+            echo "digest=sha256:$(git show "HEAD:$record" | shasum -a 256 | awk '{print $1}')"
           } >> "$GITHUB_OUTPUT"
       - name: Validate and merge readiness record
         env:

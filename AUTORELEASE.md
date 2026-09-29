@@ -57,10 +57,12 @@ key, assigned through `AUTORELEASE_OWNER`. Comments are added only for meaningfu
 changes, and GitHub Actions failure email remains an independent fallback.
 That issue is raised and updated by `php-bin`, which owns
 `scripts/notify-autorelease` and the jobs holding `issues: write`. This
-repository has no notification script and requests no issue permission at all,
-so a failure confined to the consumer workflow reaches the owner through the
-GitHub Actions failure email alone, until `php-bin` records it against the
-action key.
+repository has no notification script, so a failure confined to the consumer
+workflow reaches the owner through the GitHub Actions failure email alone,
+until `php-bin` records it against the action key. The one exception is a
+readiness record that needs the owner, described below: the
+`report-blocked-readiness` job alone holds `issues: write`, to raise that one
+issue.
 
 There is no repair phase: a failed step stops the run and retains its log, and
 the next scheduled run captures the current policy and operator state again.
@@ -73,11 +75,33 @@ lifecycle action key, and `readiness/` holds no record for it, the trigger is
 `readiness_pending`. That run records readiness at the current `main` commit,
 which carries the synchronized snapshot, through the same `record-readiness`
 job and plugin checks, and closes any readiness pull request an earlier run
-left open, since only the run that opened one can merge it. A record that
-exists but names a different policy commit or digest fails the comparison
-instead. A paused operator leaves the record pending with a warning, and a
-pause that begins while the readiness checks run stops the merge and fails the
-run.
+left open, since only the run that opened one can merge it. A paused operator
+leaves the record pending with a warning, and a pause that begins while the
+readiness checks run stops the merge and fails the run.
+
+A record that exists but does not match the synchronized policy is handled by
+what is wrong with it, and never by failing every day:
+
+- A valid record for the same action that names an earlier php-bin policy
+  commit or digest is `readiness_superseded`: php-bin accepted a newer policy
+  for that action. The run replaces the record through the same
+  `record-readiness` path, bound to the exact current policy and `main`
+  commit, so only an exact-commit record ever reads as ready.
+- A record automation could not have written, one that is unreadable,
+  malformed, not ready, in another state, or names another action, is
+  `readiness_blocked`. It may be a deliberate owner edit, so the run leaves it
+  in place and opens one issue for it, assigned through `AUTORELEASE_OWNER`,
+  and the run itself passes. Later runs comment on that issue only when the
+  record or the policy it should match changes. Fixing or deleting the record
+  in a reviewed pull request clears it: with no record, the next run records
+  readiness for the current policy.
+
+`record-readiness` pushes its record to `autorelease/readiness-<run id>`. A
+manual rerun of that job, after an earlier attempt pushed the branch with or
+without opening its pull request, reuses the branch and the open pull request
+when the branch holds exactly one commit on the same `main` whose record
+matches what the rerun would write in every field but `recordedAt`. Any other
+branch content stops the job; nothing rewrites it.
 
 A synchronization pull request that never merged, because its checks failed or
 its run stopped, leaves the snapshot out of date, so the next run synchronizes
