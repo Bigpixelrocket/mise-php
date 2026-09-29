@@ -275,8 +275,9 @@ def readiness_state(
       instead.
 
     `record` is the record's repository path, `problem` says what is wrong with a
-    blocked record and `recordDigest` identifies its exact bytes, and `mismatched`
-    lists the binding fields a superseded record names differently. Exact-commit
+    blocked record and `recordDigest` identifies its exact bytes, or no bytes when
+    it is not a regular file or cannot be read, and `mismatched` lists the binding
+    fields a superseded record names differently. Exact-commit
     semantics are unchanged: only a record bound to this exact policy is
     `recorded`, and php-bin reads nothing else as ready.
     """

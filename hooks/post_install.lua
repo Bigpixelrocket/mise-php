@@ -514,9 +514,10 @@ end
 -- value that spans several lines: PHP loads extensions in any line order.
 -- New default lines join the bundled extensions under BUNDLED_HEADER when the
 -- global scope has that header, and otherwise start a block of their own with
--- it. The global scope keeps only its first BUNDLED_HEADER. The managed extension_dir goes before the first line that is neither
--- blank nor a comment, and before that header, unless the file already starts
--- with it, as every carried file does after its first upgrade.
+-- it. The global scope keeps only its first BUNDLED_HEADER. The managed
+-- extension_dir goes before the first line that is neither blank nor a
+-- comment, and before that header, unless the file already starts with it, as
+-- every carried file does after its first upgrade.
 local function carried_ini(previous, root, extension_dir, manifest)
     local items = drop_superseded(parse_items(previous), extension_dir)
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'

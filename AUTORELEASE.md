@@ -87,14 +87,14 @@ what is wrong with it, and never by failing every day:
   for that action. The run replaces the record through the same
   `record-readiness` path, bound to the exact current policy and `main`
   commit, so only an exact-commit record ever reads as ready.
-- A record automation could not have written, one that is not a regular
-  file, unreadable, malformed, not ready, in another state, or names another
-  action, is `readiness_blocked`. It may be a deliberate owner edit, so the
-  run leaves it in place and opens one issue for it, assigned through
-  `AUTORELEASE_OWNER`, and the run itself passes. Later runs comment on that issue only when the
-  record or the policy it should match changes. Fixing or deleting the record
-  in a reviewed pull request clears it: with no record, the next run records
-  readiness for the current policy.
+- A record automation could not have written, one that is not a regular file,
+  unreadable, malformed, not ready, in another state, or names another action,
+  is `readiness_blocked`. It may be a deliberate owner edit, so the run leaves
+  it in place and opens one issue for it, assigned through
+  `AUTORELEASE_OWNER`, and the run itself passes. Later runs comment on that
+  issue only when the record or the policy it should match changes. Fixing or
+  deleting the record in a reviewed pull request clears it: with no record,
+  the next run records readiness for the current policy.
 
 `record-readiness` pushes its record to `autorelease/readiness-<run id>`. A
 manual rerun of that job, after an earlier attempt pushed the branch with or
