@@ -416,11 +416,12 @@ fi
 
 # A line that loads the extension from another install does not supersede one
 # mise-php turned off: that one loads in an install that bundles it, and the
-# other becomes the commented duplicate.
+# other becomes the commented duplicate. The note is one from before notes
+# named their extension, with whitespace around it, which still pairs.
 OTHER_DEMO_NEW="extension=$INSTALLS/8.5.1-1/lib/php/extensions/demo_new.so"
 awk -v other="$OTHER_DEMO_NEW" '
   $0 == "extension=demo_new" {
-    print "; not bundled with this build: rebuild it with PIE (pie install <package>)"
+    print "  ; not bundled with this build: rebuild it with PIE (pie install <package>)\t "
     print ";extension=demo_new"
     print other
     next
@@ -433,6 +434,10 @@ INI_852="$INSTALLS/8.5.2/bin/php.ini"
 test "$(count_lines 'extension=demo_new' "$INI_852")" = 1
 grep -A1 -Fx '; demo_new is already enabled by another line in this file: PHP warns when it loads one twice' "$INI_852" \
   | grep -Fx ";$OTHER_DEMO_NEW"
+if grep -F '; not bundled with this build' "$INI_852"; then
+  echo "A note from an earlier release with whitespace around it did not pair with its line." >&2
+  exit 1
+fi
 
 # A note stays paired only with its own line: the exact commented form
 # mise-php writes, of a line for the extension a named note names. A line of
@@ -468,8 +473,9 @@ fi
 # and a line that loads demo_on from another install, which loads nowhere and
 # stands apart between blank lines. Where neither that line nor demo_on's own
 # line loads, both stay with their notes; once demo_on loads, the other line
-# goes without leaving a gap. New defaults join the bundled header, and no
-# header names the install a file was carried from.
+# goes without leaving a gap. New defaults join the bundled header, the
+# earlier release's header merges into it, and no header names the install a
+# file was carried from.
 use_mise_home "$TEMP_DIR/mise-converge"
 INSTALLS="$MISE_DATA_DIR/installs/php"
 mise plugin link php "$PROJECT_ROOT"
@@ -493,9 +499,13 @@ awk -v elsewhere="$ELSEWHERE_DEMO_ON" '
 mv "$TEMP_DIR/converge.ini" "$INSTALLS/8.5.1-1/bin/php.ini"
 
 # A carried file has no note directly above another note, no two blank lines
-# in a row, no note from before notes named their extension, and no header
-# naming a source install.
+# in a row, no note from before notes named their extension, no header
+# naming a source install, and at most one bundled header.
 assert_tidy() {
+  if [[ "$(count_lines '; Bundled shared extensions' "$1")" -gt 1 ]]; then
+    echo "The bundled header appears more than once in $1." >&2
+    exit 1
+  fi
   if ! awk '
     /^; .* is (not bundled with|built into|already enabled by|enabled by) / {
       if (note) bad = 1
@@ -530,7 +540,13 @@ cmp "$TEMP_DIR/converge-8.5.0-3" "$TEMP_DIR/converge-8.5.0-5"
 cmp "$TEMP_DIR/converge-8.5.3-4" "$TEMP_DIR/converge-8.5.3-6"
 INI_CONVERGED="$INSTALLS/8.5.3/bin/php.ini"
 grep -A1 -Fx '; Bundled shared extensions' "$INI_CONVERGED" | grep -Fx 'extension=demo_new'
-test "$(count_lines '; Bundled shared extensions' "$INI_CONVERGED")" = 2
+# One list under one header holds the new default, the one the earlier
+# release's header held, and the bundled ones.
+BUNDLED_LIST="$(awk '$0 == "; Bundled shared extensions" { list = 1; next } list && $0 == "" { exit } list' \
+  "$INI_CONVERGED")"
+for line in extension=demo_new extension=demo_later extension=demo_on ';extension=demo_off'; do
+  grep -Fx "$line" <<< "$BUNDLED_LIST"
+done
 test "$(count_lines 'extension=demo_on' "$INI_CONVERGED")" = 1
 test "$(count_lines 'extension=demo_later' "$INI_CONVERGED")" = 1
 test "$(count_lines 'memory_limit = 256M' "$INI_CONVERGED")" = 1

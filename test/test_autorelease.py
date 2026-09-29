@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 import json
+import os
 from unittest import mock
 
 from autorelease import admission, consumer
@@ -167,7 +168,17 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 self.assertEqual("readiness record is not a regular file", result["readiness"]["problem"])
                 self.assertEqual(digest(b""), result["readiness"]["recordDigest"])
                 remove()
+            # A regular file that cannot be read is blocked the same way.
             write(place, record)
+            place.chmod(0)
+            try:
+                if not os.access(place, os.R_OK):
+                    result = compare(policy, invariants, commit, snapshot, readiness_dir)
+                    self.assertEqual("readiness_blocked", result["trigger"])
+                    self.assertTrue(result["readiness"]["problem"].startswith("readiness record cannot be read"))
+                    self.assertEqual(digest(b""), result["readiness"]["recordDigest"])
+            finally:
+                place.chmod(0o644)
 
             # A policy change still synchronizes first, whatever the record says.
             (readiness_dir / "new_branch-8.6.json").unlink()

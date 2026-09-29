@@ -138,7 +138,9 @@ skip_double_quoted = function(lines, li, col)
             end
             li, col = step(lines, li, col)
             -- An escaped quote that ends the line closes the string instead,
-            -- as in key = "C:\path\".
+            -- as in key = "C:\path\". A backslash that is itself escaped
+            -- escapes nothing after it, so "a\\" closes at its last quote,
+            -- as PHP 8.5 reads it.
             local after = char_at(lines, li, col)
             if escaped == '"' and (after == nil or after == "\n") then
                 return li, col

@@ -162,7 +162,9 @@ changes with a comment directly above it that names the extension:
   `keep this one commented`.
 
 Extensions a new install bundles that the old file never mentioned join the
-list under `; Bundled shared extensions`. The copy reads `php.ini` the way PHP
+list under `; Bundled shared extensions`. A file carried forward by an earlier
+release can hold a second header over the extensions that copy added; the copy
+keeps only the first header, and the lines under the second join its list. The copy reads `php.ini` the way PHP
 does: a value in double or single quotes can span several lines, and so can an
 unquoted value that contains an apostrophe, up to the next apostrophe in the
 file. Lines inside such a value are left exactly as they are, even ones that

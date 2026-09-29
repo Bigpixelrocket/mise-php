@@ -285,7 +285,8 @@ def readiness_state(
     path = readiness_dir / action_filename(action_key)
     result: dict[str, Any] = {"record": f"readiness/{path.name}"}
     # A symlink or directory at the record's path is nothing automation writes, and
-    # its bytes cannot be read the way a record's are; its digest is of no bytes.
+    # its bytes cannot be read the way a record's are; its digest, like that of a
+    # record that cannot be read, is of no bytes.
     if path.is_symlink() or (path.exists() and not path.is_file()):
         return {
             **result,
@@ -295,7 +296,15 @@ def readiness_state(
         }
     if not path.exists():
         return {**result, "state": "missing"}
-    content = path.read_bytes()
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        return {
+            **result,
+            "state": "blocked",
+            "problem": f"readiness record cannot be read: {error.strerror}",
+            "recordDigest": digest(b""),
+        }
     try:
         record = json.loads(content.decode("utf-8"))
         check_readiness_record(record)

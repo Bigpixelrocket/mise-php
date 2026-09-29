@@ -310,8 +310,9 @@ end
 
 -- The note a line holds, as { kind = "off" or "shadow", name = the extension
 -- it names }, or nil. A note published before notes named their extension
--- has no name.
+-- has no name. Whitespace around a note is ignored, as it always was.
 local function parse_note(line)
+    line = line:match("^%s*(.-)%s*$")
     local kind = UNNAMED_NOTES[line]
     if kind ~= nil then
         return { kind = kind }
@@ -513,7 +514,7 @@ end
 -- value that spans several lines: PHP loads extensions in any line order.
 -- New default lines join the bundled extensions under BUNDLED_HEADER when the
 -- global scope has that header, and otherwise start a block of their own with
--- it. The managed extension_dir goes before the first line that is neither
+-- it. The global scope keeps only its first BUNDLED_HEADER. The managed extension_dir goes before the first line that is neither
 -- blank nor a comment, and before that header, unless the file already starts
 -- with it, as every carried file does after its first upgrade.
 local function carried_ini(previous, root, extension_dir, manifest)
@@ -548,9 +549,13 @@ local function carried_ini(previous, root, extension_dir, manifest)
     local lines = {}
     local global = true
     local header = nil
+    -- Whether the last line added is a blank line outside any value.
+    local last_blank = false
     for index, item in ipairs(items) do
         local extension = item.extension
         local text = item.line:match("^%s*(.-)%s*$")
+        local after_blank = last_blank
+        last_blank = false
         if item.section then
             global = false
         end
@@ -564,10 +569,21 @@ local function carried_ini(previous, root, extension_dir, manifest)
                     line = BUNDLED_HEADER
                 end
             end
-            table.insert(lines, line)
-            if not item.value and line == BUNDLED_HEADER and global and header == nil then
-                header = #lines
+            if not item.value and line == BUNDLED_HEADER and global and header ~= nil then
+                -- A second header, such as the one a carry-forward from an
+                -- earlier release wrote for the defaults it added, goes with
+                -- the blank line above it, so its lines join the first list.
+                if #lines > header and after_blank then
+                    table.remove(lines)
+                end
+            else
+                table.insert(lines, line)
+                if not item.value and line == BUNDLED_HEADER and global then
+                    header = #lines
+                end
             end
+            -- A blank line inside a value belongs to that value.
+            last_blank = not item.value and line:match("^%s*$") ~= nil
         elseif extension.commented then
             local winner = winners[extension.name]
             if winner ~= nil and winner.available then
@@ -675,14 +691,14 @@ function PLUGIN:PostInstall(ctx)
     end
 
     local source = carry_source(root)
-    local ini = nil
+    local content = nil
     if source ~= nil then
         local previous = read_file(source.dir .. "/bin/php.ini")
         if previous ~= nil then
-            ini = carried_ini(previous, root, extension_dir, manifest)
+            content = carried_ini(previous, root, extension_dir, manifest)
             print("php.ini settings carried forward from PHP " .. source.name)
         end
     end
 
-    write_file(ini_path, ini or fresh_ini(extension_dir, manifest))
+    write_file(ini_path, content or fresh_ini(extension_dir, manifest))
 end
