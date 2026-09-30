@@ -577,6 +577,48 @@ assert_tidy "$INSTALLS/8.5.3/bin/php.ini"
 test "$(count_lines '; Bundled shared extensions' "$INSTALLS/8.5.3/bin/php.ini")" = 1
 grep -A1 -Fx '; Bundled shared extensions' "$INSTALLS/8.5.3/bin/php.ini" | grep -Fx 'extension=demo_on'
 
+# MISE_PHP_CARRY_INI names a php.ini to carry from instead of the newest other
+# install. mise install -f deletes the install folder before PostInstall, so a
+# caller that saves the old php.ini first keeps its settings this way. The
+# copy is carried exactly like a sibling's: extension_dir is rewritten, a new
+# bundled extension gets its default line, and a line for an extension this
+# install lacks is commented out with its note.
+use_mise_home "$TEMP_DIR/mise-override"
+INSTALLS="$MISE_DATA_DIR/installs/php"
+mise plugin link php "$PROJECT_ROOT"
+mise install php@8.5.1-1
+printf 'memory_limit = 333M\n' >> "$INSTALLS/8.5.1-1/bin/php.ini"
+mise install php@8.5.2
+INI_OVERRIDE="$INSTALLS/8.5.2/bin/php.ini"
+grep -Fx 'memory_limit = 333M' "$INI_OVERRIDE"
+SAVED_INI="$TEMP_DIR/saved php.ini"
+sed -e 's/^memory_limit = 333M$/memory_limit = 768M/' -e '/^extension=demo_new$/d' \
+  -e 's|^extension_dir = .*$|extension_dir = "/old/place"|' "$INI_OVERRIDE" > "$SAVED_INI"
+printf 'extension=userbuilt\n' >> "$SAVED_INI"
+cp "$SAVED_INI" "$TEMP_DIR/saved-copy.ini"
+MISE_PHP_CARRY_INI="$SAVED_INI" mise install -f php@8.5.2 > "$TEMP_DIR/override.log" 2>&1
+grep -F "php.ini settings carried forward from $SAVED_INI" "$TEMP_DIR/override.log"
+cmp "$SAVED_INI" "$TEMP_DIR/saved-copy.ini"
+test "$(count_lines 'memory_limit = 768M' "$INI_OVERRIDE")" = 1
+test "$(count_lines 'memory_limit = 333M' "$INI_OVERRIDE")" = 0
+test "$(first_setting "$INI_OVERRIDE")" = "extension_dir = \"$INSTALLS/8.5.2/lib/php/extensions\""
+test "$(count_lines 'extension_dir = "/old/place"' "$INI_OVERRIDE")" = 0
+grep -A1 -Fx '; Bundled shared extensions' "$INI_OVERRIDE" | grep -Fx 'extension=demo_new'
+grep -A1 -Fx '; userbuilt is not bundled with this build: rebuild it with PIE (pie install <package>)' \
+  "$INI_OVERRIDE" | grep -Fx ';extension=userbuilt'
+assert_tidy "$INI_OVERRIDE"
+
+# A path that names nothing, a folder, or a file that cannot be read falls
+# back to the newest other install and never fails the install.
+chmod 000 "$SAVED_INI"
+for unreadable in "$TEMP_DIR/missing.ini" "$TEMP_DIR" "$SAVED_INI"; do
+  MISE_PHP_CARRY_INI="$unreadable" mise install -f php@8.5.2
+  test -x "$INSTALLS/8.5.2/bin/php"
+  grep -Fx 'memory_limit = 333M' "$INI_OVERRIDE"
+  test "$(count_lines 'memory_limit = 768M' "$INI_OVERRIDE")" = 0
+done
+chmod 600 "$SAVED_INI"
+
 # No request to the mock server carried the token.
 if grep -F 'auth=yes' "$REQUESTS"; then
   echo "A request to a server other than api.github.com carried the GitHub token." >&2

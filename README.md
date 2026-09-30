@@ -147,6 +147,18 @@ mentioned get their default lines. `mise install -f` of a version you already
 have starts from your newest *other* install of that branch, so edits made only
 in the reinstalled version are replaced.
 
+To keep a version's own settings through a reinstall, copy its `php.ini` out
+of the install folder first and name the copy in `MISE_PHP_CARRY_INI`:
+
+```bash
+cp "$(mise where php@8.4.6)/bin/php.ini" /tmp/php-8.4.6.ini
+MISE_PHP_CARRY_INI=/tmp/php-8.4.6.ini mise install -f php@8.4.6
+```
+
+The named file is carried forward exactly as another install's would be. When
+the variable is set but the file cannot be read, the install goes on and
+carries from your newest other install instead.
+
 The copy keeps exactly one active line per extension, and marks every line it
 changes with a comment directly above it that names the extension:
 
@@ -234,7 +246,7 @@ The test suite serves local fixture releases and verifies paginated version
 listing and ordering, rebuild-revision resolution, checksum-backed
 installation, that no token reaches a server other than `api.github.com`,
 `php.ini` creation and carry-forward across archive layouts and PIE-added
-lines, build-kit relocation, and `PATH` activation through mise.
+lines, carry-forward from a file named in `MISE_PHP_CARRY_INI`, build-kit relocation, and `PATH` activation through mise.
 
 ## Contributing and security
 
