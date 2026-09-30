@@ -612,7 +612,9 @@ assert_tidy "$INI_OVERRIDE"
 # back to the newest other install and never fails the install.
 chmod 000 "$SAVED_INI"
 for unreadable in "$TEMP_DIR/missing.ini" "$TEMP_DIR" "$SAVED_INI"; do
-  MISE_PHP_CARRY_INI="$unreadable" mise install -f php@8.5.2
+  MISE_PHP_CARRY_INI="$unreadable" mise install -f php@8.5.2 > "$TEMP_DIR/override.log" 2>&1
+  grep -F "MISE_PHP_CARRY_INI names $unreadable, which cannot be read: using the newest other install instead" \
+    "$TEMP_DIR/override.log"
   test -x "$INSTALLS/8.5.2/bin/php"
   grep -Fx 'memory_limit = 333M' "$INI_OVERRIDE"
   test "$(count_lines 'memory_limit = 768M' "$INI_OVERRIDE")" = 0

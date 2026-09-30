@@ -157,7 +157,9 @@ MISE_PHP_CARRY_INI=/tmp/php-8.4.6.ini mise install -f php@8.4.6
 
 The named file is carried forward exactly as another install's would be. When
 the variable is set but the file cannot be read, the install goes on and
-carries from your newest other install instead.
+carries from your newest other install instead. Set the variable for that one
+command only: exported from a shell profile, it would carry the same file into
+every PHP install, whatever its branch.
 
 The copy keeps exactly one active line per extension, and marks every line it
 changes with a comment directly above it that names the extension:
@@ -246,7 +248,8 @@ The test suite serves local fixture releases and verifies paginated version
 listing and ordering, rebuild-revision resolution, checksum-backed
 installation, that no token reaches a server other than `api.github.com`,
 `php.ini` creation and carry-forward across archive layouts and PIE-added
-lines, carry-forward from a file named in `MISE_PHP_CARRY_INI`, build-kit relocation, and `PATH` activation through mise.
+lines, carry-forward from a file named in `MISE_PHP_CARRY_INI`, build-kit
+relocation, and `PATH` activation through mise.
 
 ## Contributing and security
 
