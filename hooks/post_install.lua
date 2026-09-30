@@ -284,6 +284,30 @@ local function carry_source(root)
     return { dir = best_dir, name = best_name }
 end
 
+-- MISE_PHP_CARRY_INI names a php.ini to carry settings from instead of the
+-- newest other install of the branch. mise install -f deletes the install
+-- folder before PostInstall runs, so a caller that reinstalls a version saves
+-- its php.ini elsewhere first and names that copy here to keep the settings.
+-- An unset, empty, or unreadable path falls back to the sibling install, and
+-- never fails the install.
+local CARRY_INI_ENV = "MISE_PHP_CARRY_INI"
+
+local function carry_override()
+    local path = (os.getenv(CARRY_INI_ENV) or ""):match("^%s*(.-)%s*$")
+    if path == "" then
+        return nil
+    end
+
+    -- A folder opens on some platforms and only fails on read.
+    local ok, content = pcall(read_file, path)
+    if not ok or type(content) ~= "string" then
+        print(CARRY_INI_ENV .. " names " .. path .. ", which cannot be read: using the newest other install instead")
+        return nil
+    end
+
+    return { content = content, name = path }
+end
+
 local function fresh_ini(extension_dir, manifest)
     local lines = split_lines(HEADER)
     table.insert(lines, "")
@@ -691,10 +715,14 @@ function PLUGIN:PostInstall(ctx)
         return
     end
 
-    local source = carry_source(root)
     local content = nil
-    if source ~= nil then
-        local previous = read_file(source.dir .. "/bin/php.ini")
+    local override = carry_override()
+    if override ~= nil then
+        content = carried_ini(override.content, root, extension_dir, manifest)
+        print("php.ini settings carried forward from " .. override.name)
+    else
+        local source = carry_source(root)
+        local previous = source and read_file(source.dir .. "/bin/php.ini")
         if previous ~= nil then
             content = carried_ini(previous, root, extension_dir, manifest)
             print("php.ini settings carried forward from PHP " .. source.name)
