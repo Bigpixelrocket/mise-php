@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 autorelease-run/
 .test-tmp/
+mise.local.toml
+mise.*.local.toml
+mise.local.lock
