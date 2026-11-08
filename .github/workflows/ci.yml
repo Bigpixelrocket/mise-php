@@ -30,3 +30,23 @@ jobs:
         run: shellcheck scripts/*.sh test/fixture-php.sh
       - name: Run offline installation test
         run: scripts/test.sh
+
+  # Not a required check: the autorelease consumer and repository settings
+  # gate on "Plugin contract" alone.
+  linux:
+    name: Plugin contract on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
+      - name: Run offline installation test
+        run: scripts/test.sh

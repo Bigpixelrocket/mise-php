@@ -183,22 +183,27 @@ function M.plain_version(version)
 end
 
 
--- True when a release is published and carries both assets an install needs.
-function M.is_installable(release)
+-- True when a release is published and carries both assets an install on
+-- target needs: that platform's archive and SHA256SUMS. Releases published
+-- before php-bin built for Linux carry only the macOS archive, so they are
+-- installable on macOS alone.
+function M.is_installable(release, target)
     local version = release.tag_name
     return version ~= nil
         and not release.draft
         and not release.prerelease
-        and M.find_asset(release, M.archive_name(version)) ~= nil
+        and M.find_asset(release, M.archive_name(version, target)) ~= nil
         and M.find_asset(release, "SHA256SUMS") ~= nil
 end
 
 
--- Resolve a plain patch version to its newest installable rebuild revision and
--- return that tag with its release from the listing. With no installable match
--- it returns the plain tag and nil, so the caller reads that release directly
--- and reports what exactly is missing.
-function M.resolve_tag(version, releases)
+-- Resolve a plain patch version to its newest rebuild revision installable on
+-- target and return that tag with its release from the listing. A revision
+-- without an archive for target is skipped, so each platform installs the
+-- newest build published for it. With no installable match it returns the
+-- plain tag and nil, so the caller reads that release directly and reports
+-- what exactly is missing.
+function M.resolve_tag(version, releases, target)
     local best_tag, best_key, best_release = nil, nil, nil
 
     for _, release in ipairs(releases) do
@@ -206,7 +211,7 @@ function M.resolve_tag(version, releases)
         local key = tag and M.parse_version(tag) or nil
         if key ~= nil
             and M.plain_version(tag) == version
-            and M.is_installable(release)
+            and M.is_installable(release, target)
             and (best_key == nil or M.is_newer(key, best_key))
         then
             best_tag, best_key, best_release = tag, key, release
@@ -217,8 +222,10 @@ function M.resolve_tag(version, releases)
 end
 
 
-function M.archive_name(version)
-    return "php-" .. version .. "-cli-macos-aarch64.tar.gz"
+-- The archive php-bin publishes for one release tag on target, such as
+-- php-8.5.10-1-cli-linux-x86_64.tar.gz.
+function M.archive_name(version, target)
+    return "php-" .. version .. "-cli-" .. target.suffix .. ".tar.gz"
 end
 
 

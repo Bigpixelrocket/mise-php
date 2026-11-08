@@ -2,8 +2,10 @@
 """Serve fixture php-bin releases in the GitHub API shape the plugin reads.
 
 releases.json in the asset folder lists the releases in API order, newest
-published first, as [{"tag": "8.4.99", "draft": false}, ...]. Every archive is
-served as php-<tag>-cli-macos-aarch64.tar.gz beside one shared SHA256SUMS.
+published first, as [{"tag": "8.4.99", "draft": false}, ...]. A release lists
+the archive for each platform that has a file in the asset folder, named
+php-<tag>-cli-<platform>.tar.gz, and its own SHA256SUMS when
+sums/<tag>/SHA256SUMS exists, served at /assets/<tag>/SHA256SUMS.
 
 The release listing pages like GitHub's: per_page (default 30, at most 100)
 and page (default 1). Every request is appended to requests.log in the asset
@@ -21,14 +23,28 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(sys.argv[1])
 ASSET_DIR = Path(sys.argv[2]).resolve()
 RELEASES_PATH = "/repos/bigpixelrocket/php-bin/releases"
+PLATFORMS = ("macos-aarch64", "linux-x86_64", "linux-aarch64")
 
 
-def archive_name(tag: str) -> str:
-    return f"php-{tag}-cli-macos-aarch64.tar.gz"
+def archive_name(tag: str, platform: str) -> str:
+    return f"php-{tag}-cli-{platform}.tar.gz"
 
 
 def releases() -> list:
     return json.loads((ASSET_DIR / "releases.json").read_text())
+
+
+def release_files(tag: str) -> dict:
+    """Map each asset a release carries to its file in the asset folder."""
+    files = {}
+    for platform in PLATFORMS:
+        name = archive_name(tag, platform)
+        if (ASSET_DIR / name).is_file():
+            files[name] = (name, ASSET_DIR / name)
+    sums = ASSET_DIR / "sums" / tag / "SHA256SUMS"
+    if sums.is_file():
+        files["SHA256SUMS"] = (f"{tag}/SHA256SUMS", sums)
+    return files
 
 
 def release_payload(release: dict) -> dict:
@@ -39,14 +55,8 @@ def release_payload(release: dict) -> dict:
         "draft": release.get("draft", False),
         "prerelease": False,
         "assets": [
-            {
-                "name": archive_name(tag),
-                "browser_download_url": f"{base_url}/{archive_name(tag)}",
-            },
-            {
-                "name": "SHA256SUMS",
-                "browser_download_url": f"{base_url}/SHA256SUMS",
-            },
+            {"name": name, "browser_download_url": f"{base_url}/{path}"}
+            for name, (path, _) in release_files(tag).items()
         ],
     }
 
@@ -84,15 +94,14 @@ class Handler(BaseHTTPRequestHandler):
 
         asset_prefix = "/assets/"
         if path.startswith(asset_prefix):
-            name = path[len(asset_prefix) :]
-            known = {archive_name(release["tag"]) for release in releases()} | {"SHA256SUMS"}
-            asset = ASSET_DIR / name
-            if name not in known or not asset.is_file():
-                self.send_error(404)
-                return
-
-            content_type = "application/gzip" if name.endswith(".tar.gz") else "text/plain"
-            self.send_bytes(asset.read_bytes(), content_type)
+            requested = path[len(asset_prefix) :]
+            for release in releases():
+                for served, file in release_files(release["tag"]).values():
+                    if served == requested:
+                        content_type = "application/gzip" if served.endswith(".tar.gz") else "text/plain"
+                        self.send_bytes(file.read_bytes(), content_type)
+                        return
+            self.send_error(404)
             return
 
         self.send_error(404)

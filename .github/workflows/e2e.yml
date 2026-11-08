@@ -17,24 +17,79 @@ defaults:
 
 jobs:
   install:
-    name: Install PHP ${{ inputs.version }}
-    runs-on: macos-26
+    name: Install PHP ${{ inputs.version }} on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-26
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    env:
+      VERSION: ${{ inputs.version }}
+      # Anonymous GitHub API calls from shared runners hit the rate limit.
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
-      - name: Link plugin
-        run: mise plugin link php "$GITHUB_WORKSPACE"
-      # Anonymous GitHub API calls from shared runners hit the rate limit.
-      - name: Install published release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: mise install "php@${{ inputs.version }}"
-      - name: Smoke test PHP
+      # Releases published before php-bin built for Linux carry only the macOS
+      # archive. A Linux leg passes without installing when no release of the
+      # requested version has this runner's archive: the exact tag for a
+      # revision such as 8.5.12-2, or the patch or any of its revisions for a
+      # plain version such as 8.5.12.
+      - name: Find a build for this runner
+        id: build
         run: |
-          mise exec "php@${{ inputs.version }}" -- php -v
-          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx Core
-          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx redis
-          mise exec "php@${{ inputs.version }}" -- php -m | grep -Fx sqlsrv
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            macOS-ARM64) echo "available=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            Linux-X64) suffix=linux-x86_64 ;;
+            Linux-ARM64) suffix=linux-aarch64 ;;
+            *) echo "Unsupported runner $RUNNER_OS $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          tags="$(gh api --paginate "repos/bigpixelrocket/php-bin/releases?per_page=100" \
+            | jq -s -r --arg version "$VERSION" --arg suffix "$suffix" '
+                add[]
+                | select((.draft | not) and (.prerelease | not))
+                | select(.tag_name == $version
+                    or (($version | test("-")) | not)
+                      and (.tag_name | startswith($version + "-"))
+                      and (.tag_name[($version | length) + 1:] | test("^[1-9][0-9]*$")))
+                | . as $release
+                | select(any($release.assets[]; .name == "php-\($release.tag_name)-cli-\($suffix).tar.gz"))
+                | select(any($release.assets[]; .name == "SHA256SUMS"))
+                | .tag_name')"
+          if [[ -z "$tags" ]]; then
+            echo "::notice title=No $suffix build::php-bin $VERSION has no $suffix archive; skipping this runner."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Builds with a $suffix archive: $(tr '\n' ' ' <<< "$tags")"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Link plugin
+        if: steps.build.outputs.available == 'true'
+        run: mise plugin link php "$GITHUB_WORKSPACE"
+      - name: Install published release
+        if: steps.build.outputs.available == 'true'
+        run: mise install "php@$VERSION"
+      - name: Smoke test PHP
+        if: steps.build.outputs.available == 'true'
+        run: |
+          mise exec "php@$VERSION" -- php -v
+          mise exec "php@$VERSION" -- php -m | grep -Fx Core
+          mise exec "php@$VERSION" -- php -m | grep -Fx redis
+          mise exec "php@$VERSION" -- php -m | grep -Fx sqlsrv
+      # Both TLS stacks must trust the system's CA certificates; on Linux the
+      # plugin names the bundle in php.ini.
+      - name: Smoke test HTTPS
+        if: steps.build.outputs.available == 'true'
+        run: |
+          mise exec "php@$VERSION" -- php -r \
+            'exit(file_get_contents("https://www.php.net/") === false ? 1 : 0);'
+          # The PHP code is single-quoted on purpose: $c is a PHP variable.
+          # shellcheck disable=SC2016
+          mise exec "php@$VERSION" -- php -r \
+            '$c = curl_init("https://www.php.net/"); curl_setopt($c, CURLOPT_RETURNTRANSFER, true); exit(curl_exec($c) === false ? 1 : 0);'

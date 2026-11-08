@@ -9,10 +9,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 "$SCRIPT_DIR/generate-policy-lua"
 git -C "$PROJECT_ROOT" diff --exit-code lib/policy.lua
 
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "Plugin installation tests require macOS arm64." >&2
-  exit 1
-fi
+# The suite installs fixture archives for the platform it runs on. OTHER_SUFFIX
+# is a platform the host is not, for the releases built only for it.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) HOST_SUFFIX=macos-aarch64 HOST_LABEL="macOS arm64" OTHER_SUFFIX=linux-x86_64 ;;
+  Linux-x86_64) HOST_SUFFIX=linux-x86_64 HOST_LABEL="Linux x86_64" OTHER_SUFFIX=macos-aarch64 ;;
+  Linux-aarch64) HOST_SUFFIX=linux-aarch64 HOST_LABEL="Linux aarch64" OTHER_SUFFIX=macos-aarch64 ;;
+  *)
+    echo "Plugin installation tests require macOS arm64, Linux x86_64, or Linux aarch64." >&2
+    exit 1
+    ;;
+esac
+ALL_SUFFIXES="macos-aarch64 linux-x86_64 linux-aarch64"
 
 if ! command -v mise >/dev/null 2>&1; then
   echo "mise is required to run plugin tests." >&2
@@ -41,10 +49,42 @@ trap cleanup EXIT
 ASSETS="$TEMP_DIR/assets"
 mkdir -p "$ASSETS"
 
-# Package a fixture archive for <tag>. "current" is the layout published before
-# shared extensions: only bin/php and the notices. "shared" adds the build kit
-# with its install-prefix placeholder, lib/php/extensions, and the manifest,
-# whose extensions are the remaining arguments as name:default[:zend].
+sha256_lines() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  else
+    shasum -a 256 "$@"
+  fi
+}
+
+# Edit a file in place with sed expressions; BSD and GNU sed disagree on -i.
+edit_file() {
+  local file="$1"
+  shift
+  sed "$@" "$file" > "$file.edited"
+  cat "$file.edited" > "$file"
+  rm "$file.edited"
+}
+
+# The CA bundle PostInstall names on this host, mirroring CA_BUNDLES in
+# hooks/post_install.lua, or empty on macOS and on a system without one.
+CA_BUNDLE=""
+if [[ "$HOST_SUFFIX" == linux-* ]]; then
+  for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+    /etc/ssl/cert.pem /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/ca-bundle.pem; do
+    if [[ -r "$candidate" ]]; then
+      CA_BUNDLE="$candidate"
+      break
+    fi
+  done
+fi
+
+# Package a fixture archive for <tag> for each platform in FIXTURE_PLATFORMS
+# (every platform when unset), and the release's SHA256SUMS listing them all.
+# "current" is the layout published before shared extensions: only bin/php and
+# the notices. "shared" adds the build kit with its install-prefix placeholder,
+# lib/php/extensions, and the manifest, whose extensions are the remaining
+# arguments as name:default[:zend].
 package_fixture() {
   local tag="$1"
   local layout="$2"
@@ -76,7 +116,13 @@ package_fixture() {
       "$tag" "${tag%%-*}" "$extensions" > "$package/share/php-bin/manifest.json"
   fi
 
-  COPYFILE_DISABLE=1 tar -czf "$ASSETS/php-$tag-cli-macos-aarch64.tar.gz" -C "$package" .
+  local suffix archives=()
+  for suffix in ${FIXTURE_PLATFORMS:-$ALL_SUFFIXES}; do
+    COPYFILE_DISABLE=1 tar -czf "$ASSETS/php-$tag-cli-$suffix.tar.gz" -C "$package" .
+    archives+=("php-$tag-cli-$suffix.tar.gz")
+  done
+  mkdir -p "$ASSETS/sums/$tag"
+  (cd "$ASSETS" && sha256_lines "${archives[@]}") | sort -k2 > "$ASSETS/sums/$tag/SHA256SUMS"
 }
 
 package_fixture 8.4.99 current
@@ -88,11 +134,16 @@ package_fixture 8.5.1-1 shared demo_on:true demo_off:false demo_zend:false:zend
 package_fixture 8.5.2 shared demo_on:true demo_off:false demo_zend:false:zend demo_new:true
 package_fixture 8.5.2-1 shared demo_on:true
 package_fixture 8.5.3 shared demo_on:true demo_off:false demo_zend:false:zend demo_new:true demo_later:true
-ARCHIVE_NAME="php-8.4.99-cli-macos-aarch64.tar.gz"
-(
-  cd "$ASSETS"
-  shasum -a 256 php-*-cli-macos-aarch64.tar.gz > SHA256SUMS
-)
+# Builds for another platform only, the way releases published before php-bin
+# built for Linux carry only the macOS archive: 8.3.4 has no build for this
+# host at all, and the newest 8.3.5 revision has none either.
+FIXTURE_PLATFORMS="$OTHER_SUFFIX" package_fixture 8.3.4 current
+package_fixture 8.3.5 current
+FIXTURE_PLATFORMS="$OTHER_SUFFIX" package_fixture 8.3.5-1 current
+ARCHIVE_NAME="php-8.4.99-cli-$HOST_SUFFIX.tar.gz"
+# Each SHA256SUMS lists every archive of its release, so the host's own entry
+# is not always the first line.
+test "$(wc -l < "$ASSETS/sums/8.4.99/SHA256SUMS")" -eq 3
 
 # API order is publish order, newest first: a rebuild of the older 8.5.1 was
 # published after 8.5.2, and the newest 8.5.2 revision is still a draft. One
@@ -109,6 +160,9 @@ ARCHIVE_NAME="php-8.4.99-cli-macos-aarch64.tar.gz"
   {"tag": "8.5.1"},
   {"tag": "8.5.0"},
   {"tag": "8.4.99"},
+  {"tag": "8.3.5-1"},
+  {"tag": "8.3.5"},
+  {"tag": "8.3.4"},
   {"tag": "8.1.99"},
   {"tag": "9.0.1"}
 ]
@@ -188,7 +242,7 @@ grep -Fx "9.0.1" <<< "$FUTURE_VERSIONS"
 # reads no release by tag.
 mark_requests
 mise install php@8.5.1
-new_requests | grep -F '/assets/php-8.5.1-1-cli-macos-aarch64.tar.gz '
+new_requests | grep -F "/assets/php-8.5.1-1-cli-$HOST_SUFFIX.tar.gz "
 if new_requests | grep -F '/releases/tags/'; then
   echo "A plain-version install read its release again by tag." >&2
   exit 1
@@ -200,6 +254,18 @@ grep -Fx 'extension=demo_on' "$ROOT_851/bin/php.ini"
 grep -Fx ';extension=demo_off' "$ROOT_851/bin/php.ini"
 grep -Fx ';zend_extension=demo_zend' "$ROOT_851/bin/php.ini"
 grep -Fx ';memory_limit = 128M' "$ROOT_851/bin/php.ini"
+# A Linux install names this system's CA bundle for OpenSSL and curl, after
+# its bundled extensions; macOS and a Linux system without a bundle get none.
+CA_COMMENT='; CA certificates for HTTPS, found on this system by mise-php.'
+if [[ -n "$CA_BUNDLE" ]]; then
+  EXPECTED_CA_LINES=2
+  grep -B2 -A2 -Fx "$CA_COMMENT" "$ROOT_851/bin/php.ini" | tr '\n' '|' \
+    | grep -Fx ";zend_extension=demo_zend||$CA_COMMENT|openssl.cafile = \"$CA_BUNDLE\"|curl.cainfo = \"$CA_BUNDLE\"|"
+else
+  EXPECTED_CA_LINES=0
+  echo "No CA bundle on this host: checking that php.ini names none." >&2
+fi
+test "$({ grep -c -E '^;?(openssl\.cafile|curl\.cainfo)' "$ROOT_851/bin/php.ini" || true; })" = "$EXPECTED_CA_LINES"
 grep -Fx "prefix=\"$ROOT_851\"" "$ROOT_851/bin/php-config"
 grep -Fx "extension_dir=\"$ROOT_851/lib/php/extensions\"" "$ROOT_851/bin/php-config"
 grep -Fx "prefix='$ROOT_851'" "$ROOT_851/bin/phpize"
@@ -223,8 +289,12 @@ fi
 # span lines. Every extension= line inside them is text, not a directive. A
 # single or double quote that never closes, or an "=" inside a value, makes
 # PHP stop reading, so the lines after it are handled one by one as before.
-sed -i '' -e 's/^extension=demo_on$/;extension=demo_on/' -e '/^extension_dir = /d' \
-  "$ROOT_851/bin/php.ini"
+# On Linux the file loses the CA lines mise-php wrote and names a CA bundle of
+# its own, active for OpenSSL and commented out for curl; on macOS, which gets
+# no CA lines, the user's lines are new.
+edit_file "$ROOT_851/bin/php.ini" -e 's/^extension=demo_on$/;extension=demo_on/' -e '/^extension_dir = /d' \
+  -e '/^openssl\.cafile = /d' -e '/^curl\.cainfo = /d' -e '/^; CA certificates for HTTPS/d'
+printf 'openssl.cafile = /custom/ca.pem\n;curl.cainfo = /also/mine.pem\n' >> "$ROOT_851/bin/php.ini"
 {
   printf 'memory_limit = 512M\nextension=userbuilt\nextension=%s\nextension=/opt/ext/\n' \
     "$ROOT_851/lib/php/extensions/abspath.so"
@@ -260,6 +330,15 @@ test "$(grep -n -Fx 'extension=demo_new' "$INI_852" | cut -d: -f1)" \
   -lt "$(grep -n -Fx 'memory_limit = 512M' "$INI_852" | cut -d: -f1)"
 test "$(grep '^extension_dir' "$INI_852" | sort -u)" = "extension_dir = \"$ROOT_852/lib/php/extensions\""
 grep -Fx 'memory_limit = 512M' "$INI_852"
+# The CA settings the user wrote, one active and one commented out, are theirs:
+# neither is changed, and no CA line is added for either.
+test "$({ grep -c -E '^;?(openssl\.cafile|curl\.cainfo)' "$INI_852" || true; })" = 2
+grep -Fx 'openssl.cafile = /custom/ca.pem' "$INI_852"
+grep -Fx ';curl.cainfo = /also/mine.pem' "$INI_852"
+if grep -Fx "$CA_COMMENT" "$INI_852"; then
+  echo "CA lines were added beside the user's own CA settings." >&2
+  exit 1
+fi
 grep -Fx ';extension=demo_on' "$INI_852"
 grep -Fx ';extension=demo_off' "$INI_852"
 grep -A1 -Fx '; userbuilt is not bundled with this build: rebuild it with PIE (pie install <package>)' "$INI_852" \
@@ -330,6 +409,107 @@ fi
 mise install php@8.1.99
 test -x "$INSTALLS/8.1.99/bin/php"
 
+# Builds per platform. A patch with no build for this host is not listed, and
+# installing it names the platform. A plain patch skips a newer revision built
+# only for another platform, and pinning that revision fails.
+grep -Fx "8.3.5" <<< "$AVAILABLE_VERSIONS"
+if grep -Fx "8.3.4" <<< "$AVAILABLE_VERSIONS"; then
+  echo "A patch without a $HOST_LABEL build was listed." >&2
+  exit 1
+fi
+if mise install php@8.3.4 > "$TEMP_DIR/no-build.log" 2>&1; then
+  echo "A patch without a $HOST_LABEL build was installed." >&2
+  exit 1
+fi
+grep -F "no $HOST_LABEL build for 8.3.4: the release has no php-8.3.4-cli-$HOST_SUFFIX.tar.gz" \
+  "$TEMP_DIR/no-build.log"
+mark_requests
+mise install php@8.3.5
+new_requests | grep -F "/assets/php-8.3.5-cli-$HOST_SUFFIX.tar.gz "
+new_requests | grep -F "/assets/8.3.5/SHA256SUMS "
+if mise install php@8.3.5-1 > "$TEMP_DIR/no-build-pin.log" 2>&1; then
+  echo "A revision without a $HOST_LABEL build was installed." >&2
+  exit 1
+fi
+grep -F "no $HOST_LABEL build for 8.3.5-1: the release has no php-8.3.5-1-cli-$HOST_SUFFIX.tar.gz" \
+  "$TEMP_DIR/no-build-pin.log"
+test ! -e "$INSTALLS/8.3.5-1"
+
+# mise writes a lockfile entry for another platform by running PreInstall with
+# RUNTIME set to that platform. Each entry gets that platform's archive from
+# the newest revision built for it, with the checksum SHA256SUMS lists for it.
+# mise also writes entries by default for platforms php-bin does not build,
+# such as Intel macOS and Windows; those get none, and the lockfile still
+# completes.
+lock_entry() {
+  awk -v section="[tools.php.\"platforms.$2\"]" '
+    $0 == section { found = 1; next }
+    found && /^\[/ { exit }
+    found && NF { print }
+  ' "$1"
+}
+LOCK_PROJECT="$TEMP_DIR/lock-project"
+mkdir -p "$LOCK_PROJECT"
+printf '[tools]\nphp = "8.3.5"\n' > "$LOCK_PROJECT/mise.toml"
+(
+  cd "$LOCK_PROJECT"
+  mise trust --quiet "$LOCK_PROJECT/mise.toml"
+  mise lock --platform macos-arm64,linux-x64,linux-arm64,macos-x64,windows-x64
+)
+LOCKFILE="$LOCK_PROJECT/mise.lock"
+for entry in macos-arm64:macos-aarch64 linux-x64:linux-x86_64 linux-arm64:linux-aarch64; do
+  IFS=: read -r lock_platform suffix <<< "$entry"
+  tag=8.3.5
+  if [[ "$suffix" == "$OTHER_SUFFIX" ]]; then tag=8.3.5-1; fi
+  archive="php-$tag-cli-$suffix.tar.gz"
+  sum="$(awk -v name="$archive" '$2 == name { print $1 }' "$ASSETS/sums/$tag/SHA256SUMS")"
+  test -n "$sum"
+  test "$(lock_entry "$LOCKFILE" "$lock_platform")" \
+    = "$(printf 'checksum = "sha256:%s"\nurl = "http://127.0.0.1:%s/assets/%s"' "$sum" "$PORT" "$archive")"
+done
+for lock_platform in macos-x64 windows-x64; do
+  test -z "$(lock_entry "$LOCKFILE" "$lock_platform")"
+done
+
+# On a machine php-bin does not build for, the plugin raises the unsupported
+# error instead: it tells a lockfile entry for another platform from this
+# machine by uname. A stand-in uname plays an Intel Mac, then Windows, where
+# uname is missing; locking that platform is then a lock for this machine.
+FAKE_BIN="$TEMP_DIR/fake-uname"
+mkdir -p "$FAKE_BIN"
+for entry in 'macos-x64:Darwin x86_64:darwin and architecture amd64' \
+  'windows-x64::windows and architecture amd64'; do
+  IFS=: read -r lock_platform machine detected <<< "$entry"
+  if [[ -n "$machine" ]]; then
+    printf '#!/bin/sh\necho "%s"\n' "$machine" > "$FAKE_BIN/uname"
+  else
+    printf '#!/bin/sh\nexit 127\n' > "$FAKE_BIN/uname"
+  fi
+  chmod +x "$FAKE_BIN/uname"
+  if (cd "$LOCK_PROJECT" && PATH="$FAKE_BIN:$PATH" mise lock --platform "$lock_platform") \
+    > "$TEMP_DIR/unsupported.log" 2>&1; then
+    echo "An unsupported $lock_platform machine was not refused." >&2
+    exit 1
+  fi
+  grep -F "php binaries are available only for macOS arm64, Linux x86_64, and Linux aarch64 with glibc; detected OS $detected" \
+    "$TEMP_DIR/unsupported.log"
+done
+
+# A Linux host with musl libc cannot run the glibc binaries, and says so
+# before anything downloads. MISE_LIBC makes mise report musl.
+if [[ "$HOST_SUFFIX" == linux-* ]]; then
+  mark_requests
+  if MISE_LIBC=musl mise install php@8.4.99 > "$TEMP_DIR/musl.log" 2>&1; then
+    echo "A musl host installed a glibc build." >&2
+    exit 1
+  fi
+  grep -F "this Linux system uses musl libc" "$TEMP_DIR/musl.log"
+  if new_requests | grep -F '.tar.gz '; then
+    echo "A musl host downloaded an archive." >&2
+    exit 1
+  fi
+fi
+
 # php.ini carry-forward across layouts and PIE, in a home of its own so the
 # newest install of the branch is always the one each step names.
 use_mise_home "$TEMP_DIR/mise-carry"
@@ -379,7 +559,7 @@ fi
 
 # The user removes the ";" anyway: the next install keeps one active line and
 # turns the second off. demo_new and demo_later are not in 8.5.1-1.
-sed -i '' 's/^;extension=demo_off$/extension=demo_off/' "$INI_853"
+edit_file "$INI_853" 's/^;extension=demo_off$/extension=demo_off/'
 test "$(count_lines 'extension=demo_off' "$INI_853")" = 2
 mise install php@8.5.1-1
 INI_8511="$INSTALLS/8.5.1-1/bin/php.ini"
@@ -506,6 +686,10 @@ assert_tidy() {
     echo "The bundled header appears more than once in $1." >&2
     exit 1
   fi
+  if [[ "$({ grep -c -E '^(openssl\.cafile|curl\.cainfo) = ' "$1" || true; })" != "$EXPECTED_CA_LINES" ]]; then
+    echo "The CA lines were dropped or repeated in $1." >&2
+    exit 1
+  fi
   if ! awk '
     /^; .* is (not bundled with|built into|already enabled by|enabled by) / {
       if (note) bad = 1
@@ -593,7 +777,8 @@ INI_OVERRIDE="$INSTALLS/8.5.2/bin/php.ini"
 grep -Fx 'memory_limit = 333M' "$INI_OVERRIDE"
 SAVED_INI="$TEMP_DIR/saved php.ini"
 sed -e 's/^memory_limit = 333M$/memory_limit = 768M/' -e '/^extension=demo_new$/d' \
-  -e 's|^extension_dir = .*$|extension_dir = "/old/place"|' "$INI_OVERRIDE" > "$SAVED_INI"
+  -e 's|^extension_dir = .*$|extension_dir = "/old/place"|' \
+  -e '/^curl\.cainfo = /d' -e '/^; CA certificates for HTTPS/d' "$INI_OVERRIDE" > "$SAVED_INI"
 printf 'extension=userbuilt\n' >> "$SAVED_INI"
 cp "$SAVED_INI" "$TEMP_DIR/saved-copy.ini"
 MISE_PHP_CARRY_INI="$SAVED_INI" mise install -f php@8.5.2 > "$TEMP_DIR/override.log" 2>&1
@@ -606,6 +791,12 @@ test "$(count_lines 'extension_dir = "/old/place"' "$INI_OVERRIDE")" = 0
 grep -A1 -Fx '; Bundled shared extensions' "$INI_OVERRIDE" | grep -Fx 'extension=demo_new'
 grep -A1 -Fx '; userbuilt is not bundled with this build: rebuild it with PIE (pie install <package>)' \
   "$INI_OVERRIDE" | grep -Fx ';extension=userbuilt'
+# The saved copy kept its OpenSSL CA line but lost curl's: only curl's comes
+# back, under its comment, on a host that has a CA bundle.
+if [[ -n "$CA_BUNDLE" ]]; then
+  grep -A1 -Fx "$CA_COMMENT" "$INI_OVERRIDE" | tr '\n' '|' | grep -Fx "$CA_COMMENT|curl.cainfo = \"$CA_BUNDLE\"|"
+fi
+test "$(count_lines "$CA_COMMENT" "$INI_OVERRIDE")" = "$((EXPECTED_CA_LINES / 2))"
 assert_tidy "$INI_OVERRIDE"
 
 # A path that names nothing, a folder, or a file that cannot be read falls
@@ -628,7 +819,7 @@ if grep -F 'auth=yes' "$REQUESTS"; then
 fi
 grep -F 'auth=no' "$REQUESTS" > /dev/null
 
-printf '%064d  %s\n' 0 "$ARCHIVE_NAME" > "$ASSETS/SHA256SUMS"
+printf '%064d  %s\n' 0 "$ARCHIVE_NAME" > "$ASSETS/sums/8.4.99/SHA256SUMS"
 use_mise_home "$TEMP_DIR/mise-bad"
 mise plugin link php "$PROJECT_ROOT"
 if mise install php@8.4.99 > "$TEMP_DIR/bad-checksum.log" 2>&1; then
