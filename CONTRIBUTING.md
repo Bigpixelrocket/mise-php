@@ -3,9 +3,10 @@
 Changes are welcome through pull requests.
 
 1. On an Apple Silicon Mac or on Linux x86_64 or aarch64 with glibc, with mise
-   installed, run `mise trust && mise install` once to get the pinned dev tools
-   from `mise.toml`, then run `mise exec -- scripts/test.sh` (or
-   `scripts/test.sh` in a mise-activated shell).
+   on your `PATH`, run `scripts/test.sh`. It trusts this checkout for its own
+   mise calls and needs no network. For the pinned dev tools in `mise.toml`
+   that CI also uses, run `mise trust && mise install` once, then lint with
+   `mise exec -- shellcheck scripts/*.sh test/fixture-php.sh`.
 2. Keep the `php-bin` artifact name and archive layout contract backward
    compatible.
 3. Treat checksum verification, release filtering, and download URL changes as

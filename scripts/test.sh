@@ -26,6 +26,15 @@ if ! command -v mise >/dev/null 2>&1; then
   echo "mise is required to run plugin tests." >&2
   exit 1
 fi
+# The nested mise calls below run in throwaway homes whose state has never seen
+# this checkout trusted, yet they read its mise.toml, so trust it here. Paths
+# already trusted, such as the workspace mise-action trusts, stay trusted.
+# They also turn off its lockfile setting, so they neither read nor write this
+# checkout's mise.lock: older mise releases, such as the one php-bin's verifier
+# pins, reject its lockfile version or rewrite the file on each install. The
+# mise lock call below still writes its own project's lockfile.
+export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:+$MISE_TRUSTED_CONFIG_PATHS:}$PROJECT_ROOT"
+export MISE_LOCKFILE=false
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mise-php-test.XXXXXX")"
 SERVER_PID=""
