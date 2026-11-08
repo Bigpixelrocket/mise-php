@@ -2,7 +2,10 @@
 
 Changes are welcome through pull requests.
 
-1. Run `scripts/test.sh` on an Apple Silicon Mac with mise installed.
+1. On an Apple Silicon Mac with mise installed, run `mise trust && mise install`
+   once to get the pinned dev tools from `mise.toml`, then run
+   `mise exec -- scripts/test.sh` (or `scripts/test.sh` in a mise-activated
+   shell).
 2. Keep the `php-bin` artifact name and archive layout contract backward
    compatible.
 3. Treat checksum verification, release filtering, and download URL changes as
