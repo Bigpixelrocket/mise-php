@@ -124,6 +124,10 @@ end
 -- macOS or Windows, when it is not this machine. mise writes lockfile entries
 -- for those by default, and a plugin error would abort the whole lockfile, so
 -- PreInstall returns no archive for them and mise leaves them out.
+--
+-- A set envType always means this Linux host, never a lockfile entry. That
+-- matters where RUNTIME and uname disagree on the host itself: a 32-bit ARM
+-- mise reports archType "arm" on a 64-bit kernel whose uname says aarch64.
 function M.current()
     local os_type = tostring(RUNTIME.osType)
     local arch_type = tostring(RUNTIME.archType)
@@ -132,7 +136,7 @@ function M.current()
     local target = os_name and arch_name and TARGETS[os_name .. "-" .. arch_name]
 
     if target == nil then
-        if is_lockfile_target(os_type, arch_type) then
+        if RUNTIME.envType == nil and is_lockfile_target(os_type, arch_type) then
             return nil
         end
         error("php binaries are available only for " .. SUPPORTED

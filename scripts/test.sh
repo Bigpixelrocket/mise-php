@@ -471,6 +471,30 @@ for lock_platform in macos-x64 windows-x64; do
   test -z "$(lock_entry "$LOCKFILE" "$lock_platform")"
 done
 
+# On a machine php-bin does not build for, the plugin raises the unsupported
+# error instead: it tells a lockfile entry for another platform from this
+# machine by uname. A stand-in uname plays an Intel Mac, then Windows, where
+# uname is missing; locking that platform is then a lock for this machine.
+FAKE_BIN="$TEMP_DIR/fake-uname"
+mkdir -p "$FAKE_BIN"
+for entry in 'macos-x64:Darwin x86_64:darwin and architecture amd64' \
+  'windows-x64::windows and architecture amd64'; do
+  IFS=: read -r lock_platform machine detected <<< "$entry"
+  if [[ -n "$machine" ]]; then
+    printf '#!/bin/sh\necho "%s"\n' "$machine" > "$FAKE_BIN/uname"
+  else
+    printf '#!/bin/sh\nexit 127\n' > "$FAKE_BIN/uname"
+  fi
+  chmod +x "$FAKE_BIN/uname"
+  if (cd "$LOCK_PROJECT" && PATH="$FAKE_BIN:$PATH" mise lock --platform "$lock_platform") \
+    > "$TEMP_DIR/unsupported.log" 2>&1; then
+    echo "An unsupported $lock_platform machine was not refused." >&2
+    exit 1
+  fi
+  grep -F "php binaries are available only for macOS arm64, Linux x86_64, and Linux aarch64 with glibc; detected OS $detected" \
+    "$TEMP_DIR/unsupported.log"
+done
+
 # A Linux host with musl libc cannot run the glibc binaries, and says so
 # before anything downloads. MISE_LIBC makes mise report musl.
 if [[ "$HOST_SUFFIX" == linux-* ]]; then
