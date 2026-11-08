@@ -1,12 +1,12 @@
 -- The platform a hook works for, and the php-bin archive suffix that serves it.
 --
 -- RUNTIME describes the machine mise runs on, except while mise writes a
--- lockfile entry for another platform: then mise calls PreInstall with
--- RUNTIME.osType and RUNTIME.archType set to that platform and RUNTIME.envType
--- set to nil. On a Linux host mise sets envType to "gnu" or "musl", from its
--- libc setting (MISE_LIBC) or its own detection, so a nil envType on Linux
--- means a lockfile entry for another machine, and the host checks below never
--- run for it.
+-- lockfile entry: then mise calls PreInstall with RUNTIME.osType and
+-- RUNTIME.archType set to that entry's platform, this machine's included, and
+-- RUNTIME.envType set to nil. On a Linux host mise sets envType to "gnu" or
+-- "musl", from its libc setting (MISE_LIBC) or its own detection, so a nil
+-- envType on Linux means a lockfile entry, which may be for another machine,
+-- and the host checks below never run for it.
 
 local cmd = require("cmd")
 
