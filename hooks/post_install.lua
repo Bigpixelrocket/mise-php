@@ -49,6 +49,21 @@ local BUNDLED_HEADER = "; Bundled shared extensions"
 -- stale on the next upgrade.
 local CARRIED_HEADER_PREFIX = "; Bundled shared extensions not in the settings carried from "
 
+-- Linux only: the CA certificate bundles PHP's OpenSSL and curl may need,
+-- first match wins. The binaries look for certificates under /etc/ssl, which
+-- Fedora and RHEL do not use, so every Linux install names the bundle this
+-- system has in openssl.cafile and curl.cainfo. With none of these present
+-- both stay unset, and PHP falls back to its compiled-in /etc/ssl paths.
+local CA_BUNDLES = {
+    "/etc/ssl/certs/ca-certificates.crt", -- Debian, Ubuntu, Arch, Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt", -- Fedora, RHEL
+    "/etc/ssl/cert.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/ca-bundle.pem", -- openSUSE
+}
+local CA_SETTINGS = { "openssl.cafile", "curl.cainfo" }
+local CA_COMMENT = "; CA certificates for HTTPS, found on this system by mise-php."
+
 local HEADER = [[
 ; php.ini for this PHP install, written by mise-php.
 ;
@@ -107,6 +122,50 @@ local function file_exists(path)
 
     handle:close()
     return true
+end
+
+-- The first CA bundle in CA_BUNDLES this system has, or nil. Only Linux
+-- installs name one: macOS binaries use the system's own certificates.
+local function ca_bundle()
+    if RUNTIME.osType ~= "linux" then
+        return nil
+    end
+
+    for _, path in ipairs(CA_BUNDLES) do
+        if file_exists(path) then
+            return path
+        end
+    end
+
+    return nil
+end
+
+-- The CA lines for each setting in CA_SETTINGS that mentioned does not hold,
+-- under CA_COMMENT, or nil when there is nothing to add. A setting the file
+-- already names, active or commented out and in any section, is the user's,
+-- so it is never added again or changed.
+local function ca_group(bundle, mentioned)
+    if bundle == nil then
+        return nil
+    end
+
+    local lines = {}
+    for _, setting in ipairs(CA_SETTINGS) do
+        if not mentioned[setting] then
+            table.insert(lines, setting .. ' = "' .. bundle .. '"')
+        end
+    end
+    if #lines == 0 then
+        return nil
+    end
+
+    table.insert(lines, 1, CA_COMMENT)
+    return lines
+end
+
+-- The setting a line names, active or commented out, such as "curl.cainfo".
+local function setting_name(line)
+    return line:match("^%s*;*%s*([%w_.]+)%s*=")
 end
 
 local function shell_quote(value)
@@ -308,7 +367,7 @@ local function carry_override()
     return { content = content, name = path }
 end
 
-local function fresh_ini(extension_dir, manifest)
+local function fresh_ini(extension_dir, manifest, bundle)
     local lines = split_lines(HEADER)
     table.insert(lines, "")
     table.insert(lines, MANAGED_COMMENT)
@@ -321,6 +380,16 @@ local function fresh_ini(extension_dir, manifest)
             for _, line in ipairs(default_lines(extension)) do
                 table.insert(lines, line)
             end
+        end
+    end
+
+    -- After the bundled extensions, so that list follows extension_dir as
+    -- it always has.
+    local ca = ca_group(bundle, {})
+    if ca ~= nil then
+        table.insert(lines, "")
+        for _, line in ipairs(ca) do
+            table.insert(lines, line)
         end
     end
 
@@ -541,12 +610,22 @@ end
 -- it. The global scope keeps only its first BUNDLED_HEADER. The managed
 -- extension_dir goes before the first line that is neither blank nor a
 -- comment, and before that header, unless the file already starts with it, as
--- every carried file does after its first upgrade.
-local function carried_ini(previous, root, extension_dir, manifest)
+-- every carried file does after its first upgrade. On Linux, the CA lines for
+-- openssl.cafile and curl.cainfo follow it for each of the two the file never
+-- mentions, active or commented out; a setting the file names stays as it is.
+local function carried_ini(previous, root, extension_dir, manifest, bundle)
     local items = drop_superseded(parse_items(previous), extension_dir)
     local managed_line = 'extension_dir = "' .. extension_dir .. '"'
     local mentioned = {}
+    local settings = {}
     local builtin = nil
+
+    for _, item in ipairs(items) do
+        local name = not item.value and setting_name(item.line)
+        if name then
+            settings[name] = true
+        end
+    end
 
     -- Pick one winner per extension among the lines meant to be active: the
     -- first one this install can load, else the first one.
@@ -664,6 +743,10 @@ local function carried_ini(previous, root, extension_dir, manifest)
             at = header
         end
     end
+    local ca = ca_group(bundle, settings)
+    if ca ~= nil then
+        table.insert(groups, ca)
+    end
     if #added > 0 and header == nil then
         table.insert(added, 1, BUNDLED_HEADER)
         table.insert(groups, added)
@@ -716,18 +799,19 @@ function PLUGIN:PostInstall(ctx)
     end
 
     local content = nil
+    local bundle = ca_bundle()
     local override = carry_override()
     if override ~= nil then
-        content = carried_ini(override.content, root, extension_dir, manifest)
+        content = carried_ini(override.content, root, extension_dir, manifest, bundle)
         print("php.ini settings carried forward from " .. override.name)
     else
         local source = carry_source(root)
         local previous = source and read_file(source.dir .. "/bin/php.ini")
         if previous ~= nil then
-            content = carried_ini(previous, root, extension_dir, manifest)
+            content = carried_ini(previous, root, extension_dir, manifest, bundle)
             print("php.ini settings carried forward from PHP " .. source.name)
         end
     end
 
-    write_file(ini_path, content or fresh_ini(extension_dir, manifest))
+    write_file(ini_path, content or fresh_ini(extension_dir, manifest, bundle))
 end

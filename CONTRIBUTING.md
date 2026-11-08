@@ -2,7 +2,8 @@
 
 Changes are welcome through pull requests.
 
-1. Run `scripts/test.sh` on an Apple Silicon Mac with mise installed.
+1. Run `scripts/test.sh` with mise installed, on an Apple Silicon Mac or on
+   Linux x86_64 or aarch64 with glibc.
 2. Keep the `php-bin` artifact name and archive layout contract backward
    compatible.
 3. Treat checksum verification, release filtering, and download URL changes as
