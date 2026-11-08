@@ -1,0 +1,17 @@
+# Dev tools for the repo's scripts, tests, and CI checks. PHP is deliberately
+# absent: this repo is the php plugin, and scripts/test.sh links and tests it.
+# Python stays on 3.12, the system python3 of the ubuntu-latest jobs that run
+# the autorelease scripts, so local runs catch anything newer they would reject.
+
+[tools]
+python = "3.12"
+shellcheck = "0.11"
+jq = "1.8"
+
+[settings]
+lockfile = true
+
+[env]
+# scripts/test.sh runs mise in throwaway homes whose state forgets that this
+# checkout was trusted. Once you trust it, nested mise calls trust it too.
+MISE_TRUSTED_CONFIG_PATHS = "{{config_root}}"
