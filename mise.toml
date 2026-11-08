@@ -10,8 +10,3 @@ jq = "1.8"
 
 [settings]
 lockfile = true
-
-[env]
-# scripts/test.sh runs mise in throwaway homes whose state forgets that this
-# checkout was trusted. Once you trust it, nested mise calls trust it too.
-MISE_TRUSTED_CONFIG_PATHS = "{{config_root}}"

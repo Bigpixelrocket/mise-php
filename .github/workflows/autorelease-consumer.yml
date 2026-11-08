@@ -281,6 +281,9 @@ jobs:
           actual="sha256:$(shasum -a 256 autorelease-run/sealed/sealed.patch | awk '{print $1}')"
           test "$actual" = "$expected"
           git apply --index autorelease-run/sealed/sealed.patch
+      # The runner image has no mise, and scripts/test.sh needs it with the
+      # locked dev tools, as the Plugin contract check runs it.
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
       - name: Run authoritative plugin checks
         id: run-checks
         run: |
