@@ -904,6 +904,44 @@ class AutoreleaseConsumerTests(unittest.TestCase):
                 seal(repo, base, **arguments)
             self.assertIn("policy.lua", str(ctx.exception))
 
+    def test_admission_reads_the_mode_git_records_not_the_umask(self):
+        # Git records only whether a file is executable. Under umask 002, which
+        # Debian and Ubuntu give new users, a checkout writes group-writable files;
+        # sealing and merging must still see the 0o644 that git commits, and still
+        # refuse an executable file outside scripts/.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            accepted = ["8.3", "8.4", "8.5", "8.6"]
+            repo, base, arguments = self.seal_fixture(root, accepted, ["8.2", "8.3", "8.4", "8.5"])
+            snapshot = repo / "support-snapshot.json"
+            policy_lua = repo / "lib" / "policy.lua"
+            document = json.loads(snapshot.read_text())
+            document["maintainedBranches"] = accepted
+            snapshot.write_text(json.dumps(document) + "\n")
+            policy_lua.write_text(self.generated_policy_lua(accepted))
+            snapshot.chmod(0o664)
+            policy_lua.chmod(0o600)
+            manifest = seal(repo, base, **arguments)
+            self.assertEqual(["0o644", "0o644"], [item["mode"] for item in manifest["files"]])
+            policy_lua.chmod(0o775)
+            with self.assertRaises(AdmissionError) as ctx:
+                seal(repo, base, **arguments)
+            self.assertIn("unexpected diff mode: lib/policy.lua", str(ctx.exception))
+
+            policy_lua.chmod(0o664)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "validated"], cwd=repo, check=True)
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE
+            ).stdout.strip()
+            state = {"misePhpHead": base}
+            checks = {"Plugin contract": "success"}
+            self.assertTrue(verify_merge(repo, head, manifest, checks, state, state)["admitted"])
+            policy_lua.chmod(0o755)
+            with self.assertRaises(AdmissionError) as ctx:
+                verify_merge(repo, head, manifest, checks, state, state)
+            self.assertIn("validated file mode changed: lib/policy.lua", str(ctx.exception))
+
     def test_protected_controls_pass_owner_authored_changes_before_bot_exemptions(self):
         # The owner short-circuit must sit after the no-protected-path exit and
         # before the automation exemption, so it can never widen what a bot
