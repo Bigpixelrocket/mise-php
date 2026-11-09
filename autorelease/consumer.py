@@ -49,6 +49,14 @@ READINESS_RECORD_KEYS = frozenset({
 # other fields are valid but whose binding names another policy was written for a
 # policy that has since been superseded.
 READINESS_BINDING = ("phpBinPolicyCommit", "policyDigest", "policyInvariantsDigest")
+# The platforms php-bin publishes for and this plugin installs, exactly as php-bin's
+# reviewed `autorelease/policy-invariants.json` states them. php-bin admission asserts
+# the same list, so a change to it is a reviewed edit in both repositories.
+REVIEWED_POLICY_TARGETS = [
+    {"os": "macOS", "minimumVersion": "26.0", "architecture": "arm64", "sapi": "cli"},
+    {"os": "Linux", "minimumGlibcVersion": "2.17", "architecture": "x86_64", "sapi": "cli"},
+    {"os": "Linux", "minimumGlibcVersion": "2.17", "architecture": "aarch64", "sapi": "cli"},
+]
 SNAPSHOT_FIELDS = (
     "schemaVersion",
     "phpBinPolicyCommit",
@@ -387,19 +395,17 @@ def compare(
         raise ConsumerError("unsupported captured php-bin support policy version")
     if set(invariants_document) != {
         "schemaVersion",
-        "target",
+        "targets",
         "allowPrereleases",
         "historicalExactVersionsRemainInstallable",
         "immutablePublishedAssets",
     }:
         raise ConsumerError("captured php-bin invariants have unknown or missing fields")
-    if invariants_document.get("schemaVersion") != 1:
+    if invariants_document.get("schemaVersion") != 2:
         raise ConsumerError("unsupported captured php-bin invariant version")
     if policy_document.get("policyInvariantsDigest") != invariants_digest:
         raise ConsumerError("captured support policy is not bound to captured reviewed invariants")
-    if invariants_document.get("target") != {
-        "os": "macOS", "minimumVersion": "26.0", "architecture": "arm64", "sapi": "cli"
-    }:
+    if invariants_document.get("targets") != REVIEWED_POLICY_TARGETS:
         raise ConsumerError("captured php-bin target invariants changed")
     if invariants_document.get("allowPrereleases") is not False:
         raise ConsumerError("captured php-bin policy permits prereleases")

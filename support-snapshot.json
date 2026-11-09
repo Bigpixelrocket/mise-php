@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "phpBinPolicyCommit": "2a9a100c701c3e1e769e8cab47e8c3af61e52d89",
-  "policyDigest": "sha256:681ee030c3aaa337ab14d52b6c681f1095bae4992392e4f2c57c0639b42bedc7",
-  "policyInvariantsDigest": "sha256:2d8dd3f372f5f409ad0e4badf7cc68f8c2ed3d49fa73ab88153152efeeff57b9",
+  "policyDigest": "sha256:972d00f6d563f92c25d5df5d97de3fc3a8cde9889a6db8f3687ee23cb40f4e5c",
+  "policyInvariantsDigest": "sha256:c2fc006288a73e4b9f1634cdfe1b7b48c3133de5b0c8612b02eb272417ad0c6d",
   "maintainedBranches": ["8.2", "8.3", "8.4", "8.5"],
   "generated": true
 }
