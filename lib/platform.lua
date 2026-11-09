@@ -45,14 +45,13 @@ local function file_exists(path)
     return true
 end
 
--- True on NixOS, which keeps no dynamic loader at /lib64 or /lib, so a
--- glibc binary built for other distributions cannot start there.
-local function is_nixos()
-    if file_exists("/etc/NIXOS") then
+-- True when root holds the NixOS marker file or an os-release naming NixOS.
+local function names_nixos(root)
+    if file_exists(root .. "/etc/NIXOS") then
         return true
     end
 
-    local handle = io.open("/etc/os-release", "r")
+    local handle = io.open(root .. "/etc/os-release", "r")
     if handle == nil then
         return false
     end
@@ -67,6 +66,21 @@ local function is_nixos()
     end
 
     return false
+end
+
+-- True on NixOS, which keeps no dynamic loader at /lib64 or /lib, so a
+-- glibc binary built for other distributions cannot start there.
+--
+-- scripts/test.sh sets MISE_PHP_TEST_ROOT to a directory holding a fake /etc.
+-- It is read in addition to the real /etc, never instead, so it can only add
+-- a refusal and cannot let NixOS through.
+local function is_nixos()
+    if names_nixos("") then
+        return true
+    end
+
+    local test_root = os.getenv("MISE_PHP_TEST_ROOT")
+    return test_root ~= nil and test_root ~= "" and names_nixos(test_root)
 end
 
 -- Refuse a Linux host the published binaries cannot run on.
