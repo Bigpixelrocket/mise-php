@@ -15,15 +15,13 @@ Required repository state:
   owner can merge a pull request past a failing rule but can never push,
   force-push, or delete `main` directly. Classic branch protection (and its
   `enforce_admins` toggle) is retired; the configure script removes it.
-- Require the `Plugin contract` status check, the plugin test on macOS
-  arm64. `Plugin contract on ubuntu-latest` and
-  `Plugin contract on ubuntu-24.04-arm` run the same test on Linux x86_64 and
-  Linux aarch64 but are not yet required: the autorelease consumer's own pull
-  requests get their checks from `scripts/dispatch-pr-checks`, which waits for
-  and re-posts only `Plugin contract` and `Protected controls`, so requiring
-  the Linux checks first would leave those unattended merges blocked. The
-  configure command below takes one `--required-check`, so once that script
-  covers them, add the two Linux checks to the ruleset after running it.
+- Require the `Plugin contract`, `Plugin contract on ubuntu-latest`, and
+  `Plugin contract on ubuntu-24.04-arm` status checks: the plugin test on
+  macOS arm64, Linux x86_64, and Linux aarch64. The configure command below
+  sets all three, and refuses to drop a check the ruleset already requires.
+  Only the Linux jobs run the suite's Linux cases, such as the NixOS refusal,
+  so those cases gate a merge, the consumer's unattended ones included, only
+  while the ruleset requires the Linux checks.
 - Require the base-controlled `Protected controls` status check. It passes
   automatically for unprotected generated paths and for owner-authored pull
   requests (a solo owner cannot approve their own PR, so an owner review
@@ -42,10 +40,13 @@ Required repository state:
 - Do not allow the workflow token to approve pull requests.
 - Because GitHub suppresses ordinary PR events created by `GITHUB_TOKEN`, each
   deterministic PR coordinator explicitly dispatches `ci.yml` and
-  `protected-controls.yml` at the exact PR branch, accepts only newly created
-  successful validator runs for that head SHA, and only then publishes the
-  Actions-owned check evidence plus PR-visible commit statuses with the exact
-  validator URLs.
+  `protected-controls.yml` at the exact PR branch through
+  `scripts/dispatch-pr-checks`. It waits for every status check the rules on
+  `main` require (read from the branch rules API at run time, plus the checks
+  the caller names), accepts only newly created successful validator runs for
+  that head SHA, and only then publishes the Actions-owned check evidence plus
+  PR-visible commit statuses with the exact validator URLs. A required check
+  that fails or never runs stops the merge.
 - Allow GitHub-owned Actions plus only `jdx/mise-action`, and require every
   Action reference to use a full commit SHA.
 - Create the protected `php-autorelease-publish` environment.
@@ -66,5 +67,7 @@ event/readiness paths in a synchronization diff.
   --repo bigpixelrocket/mise-php \
   --owner loadinglucian \
   --required-check "Plugin contract" \
+  --required-check "Plugin contract on ubuntu-latest" \
+  --required-check "Plugin contract on ubuntu-24.04-arm" \
   --environment php-autorelease-publish
 ```
