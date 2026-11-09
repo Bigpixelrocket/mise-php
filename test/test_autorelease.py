@@ -25,6 +25,20 @@ from autorelease.consumer import (
 )
 
 
+# php-bin's reviewed `autorelease/policy-invariants.json`, byte for byte.
+REVIEWED_INVARIANTS = """{
+  "schemaVersion": 2,
+  "targets": [
+    {"os": "macOS", "minimumVersion": "26.0", "architecture": "arm64", "sapi": "cli"},
+    {"os": "Linux", "minimumGlibcVersion": "2.17", "architecture": "x86_64", "sapi": "cli"},
+    {"os": "Linux", "minimumGlibcVersion": "2.17", "architecture": "aarch64", "sapi": "cli"}
+  ],
+  "allowPrereleases": false,
+  "historicalExactVersionsRemainInstallable": true,
+  "immutablePublishedAssets": true
+}
+"""
+
 class AutoreleaseConsumerTests(unittest.TestCase):
     def test_opaque_policy_comparison(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -33,7 +47,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             invariants = root / "invariants.json"
             commit = root / "commit.json"
             snapshot = root / "snapshot.json"
-            invariants.write_text('{"schemaVersion":1,"target":{"os":"macOS","minimumVersion":"26.0","architecture":"arm64","sapi":"cli"},"allowPrereleases":false,"historicalExactVersionsRemainInstallable":true,"immutablePublishedAssets":true}\n')
+            invariants.write_text(REVIEWED_INVARIANTS)
             policy.write_text(json.dumps({
                 "schemaVersion": 1,
                 "policyInvariantsDigest": digest(invariants.read_bytes()),
@@ -63,6 +77,49 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             }) + "\n")
             self.assertEqual("policy_changed", compare(policy, invariants, commit, snapshot)["trigger"])
 
+    def test_captured_invariants_must_name_every_published_platform(self):
+        # php-bin's invariants name each platform a release publishes for. The
+        # retired single-macOS shape, or any other target list, stops the run.
+        reviewed = json.loads(REVIEWED_INVARIANTS)
+        self.assertEqual(consumer.REVIEWED_POLICY_TARGETS, reviewed["targets"])
+        legacy = {key: value for key, value in reviewed.items() if key != "targets"}
+        legacy.update(
+            schemaVersion=1,
+            target={"os": "macOS", "minimumVersion": "26.0", "architecture": "arm64", "sapi": "cli"},
+        )
+        cases = {
+            "retired single target": (legacy, "unknown or missing fields"),
+            "version 1 with targets": ({**reviewed, "schemaVersion": 1}, "invariant version"),
+            "dropped platform": ({**reviewed, "targets": reviewed["targets"][1:]}, "target invariants changed"),
+            "reordered platforms": ({**reviewed, "targets": reviewed["targets"][::-1]}, "target invariants changed"),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            policy = root / "policy.json"
+            invariants = root / "invariants.json"
+            commit = root / "commit.json"
+            commit.write_text('{"sha":"' + "a" * 40 + '"}\n')
+
+            def bind(body):
+                invariants.write_text(body)
+                policy.write_text(json.dumps({
+                    "schemaVersion": 1,
+                    "policyInvariantsDigest": digest(invariants.read_bytes()),
+                    "maintainedBranches": ["8.5"],
+                    "sourceEvidenceDigests": [],
+                    "actionKey": "bootstrap",
+                    "acceptedAt": "2026-07-27T00:00:00Z",
+                }) + "\n")
+
+            bind(REVIEWED_INVARIANTS)
+            result = compare(policy, invariants, commit, root / "absent-snapshot.json")
+            self.assertEqual(digest(REVIEWED_INVARIANTS.encode()), result["policyInvariantsDigest"])
+            for name, (document, message) in cases.items():
+                with self.subTest(name):
+                    bind(json.dumps(document) + "\n")
+                    with self.assertRaisesRegex(ConsumerError, message):
+                        compare(policy, invariants, commit, root / "absent-snapshot.json")
+
     def test_synchronized_policy_without_readiness_resumes_it(self):
         # A run that merged the synchronization and stopped before its readiness
         # record merged leaves the snapshot current: the comparison must still ask
@@ -75,7 +132,7 @@ class AutoreleaseConsumerTests(unittest.TestCase):
             snapshot = root / "snapshot.json"
             readiness_dir = root / "readiness"
             readiness_dir.mkdir()
-            invariants.write_text('{"schemaVersion":1,"target":{"os":"macOS","minimumVersion":"26.0","architecture":"arm64","sapi":"cli"},"allowPrereleases":false,"historicalExactVersionsRemainInstallable":true,"immutablePublishedAssets":true}\n')
+            invariants.write_text(REVIEWED_INVARIANTS)
             policy.write_text(json.dumps({
                 "schemaVersion": 1,
                 "policyInvariantsDigest": digest(invariants.read_bytes()),

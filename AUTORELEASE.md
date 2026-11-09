@@ -24,6 +24,19 @@ lifecycle key (a hand-edited `bootstrap` policy), or a capture whose bytes or
 commits disagree, fails the run. A paused operator leaves the run read-only:
 it captures and compares, then synchronizes nothing.
 
+The comparison also checks php-bin's reviewed invariants: the captured
+`policy-invariants.json` must list exactly the platforms php-bin publishes
+for and this plugin installs, macOS arm64 (macOS 26.0 or newer) and Linux
+x86_64 and aarch64 (glibc 2.17 or newer), with prereleases forbidden,
+historical exact installs kept, and published assets immutable. Any other
+invariants fail the run. Changing them takes a coordinated pair of reviewed
+pull requests: php-bin changes the file and rebinds its `bootstrap` policy
+first, then this repository changes the check in `autorelease/consumer.py`
+and, because the consumer refuses to synchronize a `bootstrap` policy,
+rebinds `support-snapshot.json` by hand to php-bin's merge commit and new
+digests. Runs between the two merges fail closed; the next run after the
+second merge is quiet.
+
 Which paths change is the point. The *harness* is protected: `scripts/test.sh`,
 `scripts/consume-php-policy`, `scripts/generate-policy-lua`,
 `scripts/check-public-language.sh`, the sealing and merge scripts, `test/`,
