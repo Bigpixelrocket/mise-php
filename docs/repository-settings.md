@@ -15,7 +15,11 @@ Required repository state:
   owner can merge a pull request past a failing rule but can never push,
   force-push, or delete `main` directly. Classic branch protection (and its
   `enforce_admins` toggle) is retired; the configure script removes it.
-- Require the `Plugin contract` status check.
+- Require the `Plugin contract`, `Plugin contract on ubuntu-latest`, and
+  `Plugin contract on ubuntu-24.04-arm` status checks: the plugin test on
+  macOS arm64, Linux x86_64, and Linux aarch64. The configure command below
+  takes one `--required-check`, so it sets only `Plugin contract`; add the two
+  Linux checks to the ruleset after running it.
 - Require the base-controlled `Protected controls` status check. It passes
   automatically for unprotected generated paths and for owner-authored pull
   requests (a solo owner cannot approve their own PR, so an owner review
