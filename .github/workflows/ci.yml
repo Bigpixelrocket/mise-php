@@ -30,10 +30,12 @@ jobs:
       - name: Run offline installation test
         run: scripts/test.sh
 
-  # Not yet required checks (docs/repository-settings.md). The autorelease
-  # consumer's own pull requests get their checks from scripts/dispatch-pr-checks,
-  # which waits for and re-posts only "Plugin contract" and "Protected controls",
-  # so requiring these jobs first would leave those unattended merges blocked.
+  # Required checks like "Plugin contract" once the ruleset lists them; the
+  # configure command in docs/repository-settings.md sets all three. The
+  # autorelease consumer's own pull requests get their checks from
+  # scripts/dispatch-pr-checks, which waits for every check the ruleset
+  # requires. Only these jobs run the suite's Linux cases, such as the NixOS
+  # refusal, so those cases gate a merge only while these checks are required.
   linux:
     name: Plugin contract on ${{ matrix.runner }}
     strategy:
