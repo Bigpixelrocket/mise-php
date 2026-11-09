@@ -69,6 +69,17 @@ def write(path: pathlib.Path, value: Any) -> None:
     path.write_bytes(canonical(value))
 
 
+def git_mode(path: pathlib.Path) -> int:
+    """The mode git records for a regular file: 0o755 when its owner may execute
+    it, else 0o644.
+
+    Git stores only that bit, so the remaining permission bits come from the umask
+    of whichever checkout wrote the file (0o664 under umask 002, for example) and
+    must not decide admission or differ between the sealing and merging jobs.
+    """
+    return 0o755 if path.stat().st_mode & 0o100 else 0o644
+
+
 def protected(path: str) -> bool:
     """Match a repository path against the protected patterns.
 
@@ -133,8 +144,8 @@ def seal(
         body = candidate.read_bytes()
         if b"\0" in body:
             raise AdmissionError(f"binary diff entry: {path}")
-        mode = candidate.stat().st_mode & 0o777
-        if mode not in {0o644, 0o755} or (mode == 0o755 and not path.startswith("scripts/")):
+        mode = git_mode(candidate)
+        if mode == 0o755 and not path.startswith("scripts/"):
             raise AdmissionError(f"unexpected diff mode: {path}")
         try:
             text = body.decode("utf-8")
@@ -266,7 +277,7 @@ def verify_merge(
             raise AdmissionError(f"sealed manifest contains protected path: {path}")
         if not candidate.is_file() or digest_file(candidate) != record.get("digest"):
             raise AdmissionError(f"validated file changed: {path}")
-        if oct(candidate.stat().st_mode & 0o777) != record.get("mode"):
+        if oct(git_mode(candidate)) != record.get("mode"):
             raise AdmissionError(f"validated file mode changed: {path}")
     return {"admitted": True, "headSha": expected_head}
 

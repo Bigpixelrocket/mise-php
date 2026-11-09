@@ -30,8 +30,10 @@ jobs:
       - name: Run offline installation test
         run: scripts/test.sh
 
-  # Not a required check: the autorelease consumer and repository settings
-  # gate on "Plugin contract" alone.
+  # Not yet required checks (docs/repository-settings.md). The autorelease
+  # consumer's own pull requests get their checks from scripts/dispatch-pr-checks,
+  # which waits for and re-posts only "Plugin contract" and "Protected controls",
+  # so requiring these jobs first would leave those unattended merges blocked.
   linux:
     name: Plugin contract on ${{ matrix.runner }}
     strategy:

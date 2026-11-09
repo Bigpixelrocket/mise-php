@@ -519,6 +519,37 @@ if [[ "$HOST_SUFFIX" == linux-* ]]; then
   fi
 fi
 
+# NixOS keeps no standard glibc loader, so a Linux host that names itself NixOS,
+# by the /etc/NIXOS marker or by ID=nixos in /etc/os-release, is refused before
+# anything downloads. MISE_PHP_TEST_ROOT gives the plugin a fake /etc to read
+# beside the real one; a plain glibc one is the control, which installs. The
+# installs run in a fresh home, so each one reaches the plugin's hooks.
+if [[ "$HOST_SUFFIX" == linux-* ]]; then
+  NIXOS_ROOTS="$TEMP_DIR/nixos-roots"
+  mkdir -p "$NIXOS_ROOTS/marker/etc" "$NIXOS_ROOTS/os-release/etc" "$NIXOS_ROOTS/glibc/etc"
+  : > "$NIXOS_ROOTS/marker/etc/NIXOS"
+  printf 'NAME=NixOS\nID_LIKE=""\nID=nixos\nVERSION_ID="25.05"\n' > "$NIXOS_ROOTS/os-release/etc/os-release"
+  printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID="24.04"\n' > "$NIXOS_ROOTS/glibc/etc/os-release"
+  use_mise_home "$TEMP_DIR/mise-nixos"
+  mise plugin link php "$PROJECT_ROOT"
+  for root in marker os-release; do
+    mark_requests
+    if MISE_PHP_TEST_ROOT="$NIXOS_ROOTS/$root" mise install php@8.4.99 > "$TEMP_DIR/nixos-$root.log" 2>&1; then
+      echo "A NixOS host ($root) installed a glibc build." >&2
+      exit 1
+    fi
+    grep -F "NixOS is not supported" "$TEMP_DIR/nixos-$root.log"
+    if new_requests | grep -F '.tar.gz '; then
+      echo "A NixOS host ($root) downloaded an archive." >&2
+      exit 1
+    fi
+  done
+  mark_requests
+  MISE_PHP_TEST_ROOT="$NIXOS_ROOTS/glibc" mise install php@8.4.99
+  new_requests | grep -F "/assets/$ARCHIVE_NAME "
+  test -x "$MISE_DATA_DIR/installs/php/8.4.99/bin/php"
+fi
+
 # php.ini carry-forward across layouts and PIE, in a home of its own so the
 # newest install of the branch is always the one each step names.
 use_mise_home "$TEMP_DIR/mise-carry"
