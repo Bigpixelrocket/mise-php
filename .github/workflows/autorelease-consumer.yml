@@ -74,13 +74,15 @@ jobs:
             fi
           done
       - name: Capture accepted public php-bin policy
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p autorelease-run
           ./scripts/consume-php-policy fetch \
             --output autorelease-run/support-policy.json \
             --invariants-output autorelease-run/policy-invariants.json \
             --commit-output autorelease-run/php-bin-main.json \
-            --manifest autorelease-run/policy-capture.json
+            --manifest autorelease-run/policy-capture.json 2>&1 | tee autorelease-run/policy-capture.log
       - name: Compare only opaque policy digests
         id: compare
         run: |

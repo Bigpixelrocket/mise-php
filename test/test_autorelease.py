@@ -1,11 +1,15 @@
+import datetime as dt
+import email.message
+import io
+import json
+import os
 import pathlib
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
-import json
-import os
+import urllib.error
 from unittest import mock
 
 from autorelease import admission, consumer
@@ -38,6 +42,105 @@ REVIEWED_INVARIANTS = """{
   "immutablePublishedAssets": true
 }
 """
+
+
+class PolicyCaptureTests(unittest.TestCase):
+    url = consumer.POLICY_COMMIT_SELECTOR_URL
+
+    def setUp(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.output = pathlib.Path(directory) / "policy.json"
+        self.opener = self.enterContext(mock.patch.object(consumer.urllib.request, "build_opener")).return_value
+        self.sleep = self.enterContext(mock.patch.object(consumer.time, "sleep"))
+        self.enterContext(mock.patch.dict(os.environ, {"GH_TOKEN": "", "GITHUB_TOKEN": ""}))
+
+    def http_error(self, status, reason="test response", **fields):
+        headers = email.message.Message()
+        for name, value in fields.items():
+            headers[name] = value
+        return urllib.error.HTTPError(self.url, status, reason, headers, None)
+
+    def response(self):
+        response = io.BytesIO(b'{"schemaVersion":1}\n')
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        return response
+
+    def test_retries_transient_http_and_network_failures_before_success(self):
+        self.opener.open.side_effect = [
+            self.http_error(502), urllib.error.URLError("unreachable"), TimeoutError(), self.response(),
+        ]
+        capture = consumer.fetch_url(self.url, self.output)
+        self.assertEqual(200, capture["status"])
+        self.assertEqual(b'{"schemaVersion":1}\n', self.output.read_bytes())
+        self.assertEqual(4, self.opener.open.call_count)
+        self.assertEqual([mock.call(2), mock.call(4), mock.call(8)], self.sleep.call_args_list)
+
+    def test_exhausted_retries_report_status_and_url_without_error_response_text(self):
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "fixture-token"}):
+            self.opener.open.side_effect = [self.http_error(502, "fixture-token") for _ in range(4)]
+            with self.assertRaises(ConsumerError) as ctx:
+                consumer.fetch_url(self.url, self.output)
+        self.assertIn("HTTP 502", str(ctx.exception))
+        self.assertIn(self.url, str(ctx.exception))
+        self.assertNotIn("fixture-token", str(ctx.exception))
+        self.assertEqual(4, self.opener.open.call_count)
+        self.assertEqual([mock.call(2), mock.call(4), mock.call(8)], self.sleep.call_args_list)
+        self.assertFalse(self.output.exists())
+
+    def test_non_transient_client_errors_fail_fast(self):
+        for status in (400, 401, 403, 422):
+            with self.subTest(status=status):
+                self.opener.open.reset_mock()
+                self.opener.open.side_effect = self.http_error(status, **{"X-RateLimit-Remaining": "1"})
+                with self.assertRaisesRegex(ConsumerError, f"HTTP {status}"):
+                    consumer.fetch_url(self.url, self.output)
+                self.opener.open.assert_called_once()
+        self.sleep.assert_not_called()
+
+    def test_unpublished_document_fails_fast_with_capture_absent(self):
+        self.opener.open.side_effect = self.http_error(404)
+        with self.assertRaises(CaptureAbsent):
+            consumer.fetch_url(self.url, self.output)
+        self.opener.open.assert_called_once()
+        self.sleep.assert_not_called()
+
+    def test_rate_limit_delays_are_honored_and_capped(self):
+        fixed_now = dt.datetime(2026, 11, 20, 12, 0, tzinfo=dt.UTC)
+        self.opener.open.side_effect = [
+            self.http_error(429, **{"Retry-After": "120"}),
+            self.http_error(403, **{"Retry-After": "Fri, 20 Nov 2026 12:00:17 GMT"}),
+            self.http_error(403, **{"X-RateLimit-Remaining": "0"}),
+            self.response(),
+        ]
+        with mock.patch.object(consumer.dt, "datetime", wraps=dt.datetime) as clock:
+            clock.now.return_value = fixed_now
+            consumer.fetch_url(self.url, self.output)
+        self.assertEqual([mock.call(60), mock.call(17), mock.call(8)], self.sleep.call_args_list)
+
+    def test_only_initial_github_api_requests_carry_authorization(self):
+        raw_url = f"{consumer.RAW_ROOT}/main/support-policy.json"
+        self.opener.open.side_effect = [self.response(), self.response()]
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}):
+            api_capture = consumer.fetch_url(self.url, self.output)
+            raw_capture = consumer.fetch_url(raw_url, self.output)
+        api_request, raw_request = [call.args[0] for call in self.opener.open.call_args_list]
+        self.assertEqual("Bearer fixture-token", api_request.get_header("Authorization"))
+        self.assertIsNone(raw_request.get_header("Authorization"))
+        self.assertNotIn("fixture-token", json.dumps([api_capture, raw_capture]))
+
+        redirect = consumer.RestrictedRedirect()
+        with self.assertRaisesRegex(urllib.error.HTTPError, "cross-host redirect rejected"):
+            redirect.redirect_request(api_request, None, 302, "Found", {}, raw_url)
+        same_host = redirect.redirect_request(api_request, None, 302, "Found", {}, consumer.POLICY_COMMIT_ROOT)
+        self.assertIsNone(same_host.get_header("Authorization"))
+
+    def test_invalid_token_fails_before_urllib_can_report_its_value(self):
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "fixture-token\n"}):
+            with self.assertRaisesRegex(ConsumerError, "GitHub token contains invalid bearer token characters"):
+                consumer.fetch_url(self.url, self.output)
+        self.opener.open.assert_not_called()
+
 
 class AutoreleaseConsumerTests(unittest.TestCase):
     def test_opaque_policy_comparison(self):
