@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import email.utils
 import hashlib
+import http.client
 import json
+import os
 import pathlib
 import re
 import sys
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -126,42 +130,84 @@ def write(path: pathlib.Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def _http_retry_delay(error: urllib.error.HTTPError, backoff: float) -> float | None:
+    """Wait for a transient HTTP error, with up to one minute for Retry-After."""
+    headers = error.headers or {}
+    retry_after = headers.get("Retry-After")
+    rate_limited = error.code == 429 or (
+        error.code == 403 and (retry_after is not None or headers.get("X-RateLimit-Remaining") == "0")
+    )
+    if not (rate_limited or error.code == 408 or 500 <= error.code <= 599):
+        return None
+    if rate_limited and retry_after:
+        try:
+            if retry_after.isdecimal():
+                return min(60, int(retry_after))
+            retry_at = email.utils.parsedate_to_datetime(retry_after)
+            return max(0, min(60, (retry_at - dt.datetime.now(dt.UTC)).total_seconds()))
+        except (TypeError, ValueError):
+            pass
+    return backoff
+
+
 def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
+    """Capture a public GitHub document, retrying only transient network failures."""
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname not in {"api.github.com", "raw.githubusercontent.com"}:
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"api.github.com", "raw.githubusercontent.com"}
+        or parsed.username is not None
+    ):
         raise ConsumerError("policy capture URL is outside the reviewed HTTPS allowlist")
     request = urllib.request.Request(
         url,
         headers={"Accept": "application/json", "User-Agent": "bigpixelrocket-autorelease/1"},
     )
+    if parsed.netloc.lower() in {"api.github.com", "api.github.com:443"}:
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if token:
+            if not re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token):
+                raise ConsumerError("GitHub token contains invalid bearer token characters")
+            request.add_unredirected_header("Authorization", f"Bearer {token}")
     opener = urllib.request.build_opener(RestrictedRedirect)
-    last_error: Exception | None = None
-    for _attempt in range(3):
+    for attempt, delay in enumerate((2, 4, 8, None), start=1):
         try:
             with opener.open(request, timeout=30) as response:
                 body = response.read(1_000_001)
-                if len(body) > 1_000_000:
-                    raise ConsumerError("php-bin policy response is too large")
-                json.loads(body)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_bytes(body)
-                return {
-                    "url": url,
-                    "retrievedAt": now(),
-                    "status": response.status,
-                    "contentType": response.headers.get("Content-Type"),
-                    "etag": response.headers.get("ETag"),
-                    "lastModified": response.headers.get("Last-Modified"),
-                    "digest": digest(body),
-                    "bodyPath": output.name,
-                }
+                status = response.status
+                headers = response.headers
+            break
         except urllib.error.HTTPError as error:
-            if error.code == 404:
-                raise CaptureAbsent(f"policy capture path is not published: {url}") from error
-            last_error = error
-        except (OSError, urllib.error.URLError, json.JSONDecodeError, ConsumerError) as error:
-            last_error = error
-    raise ConsumerError(f"policy capture failed after bounded retries: {type(last_error).__name__}")
+            with error:
+                if error.code == 404:
+                    raise CaptureAbsent(f"policy capture path is not published: {url} (HTTP 404)") from None
+                failure = f"HTTP {error.code}"
+                if delay is not None:
+                    delay = _http_retry_delay(error, delay)
+        except (OSError, http.client.HTTPException) as error:
+            # OSError covers URLError and timeouts; HTTPException covers a body
+            # cut off mid-read. The reason names the socket or TLS failure and
+            # never echoes request headers.
+            failure = f"{type(error).__name__}: {getattr(error, 'reason', error)}"
+        if delay is None:
+            raise ConsumerError(f"policy capture failed for {url}: {failure} (attempt {attempt})")
+        time.sleep(delay)
+
+    if len(body) > 1_000_000:
+        raise ConsumerError("php-bin policy response is too large")
+    json.loads(body)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(body)
+    return {
+        "url": url,
+        "retrievedAt": now(),
+        "status": status,
+        "contentType": headers.get("Content-Type"),
+        "etag": headers.get("ETag"),
+        "lastModified": headers.get("Last-Modified"),
+        "digest": digest(body),
+        "bodyPath": output.name,
+    }
 
 
 def fetch_first_url(urls: tuple[str, ...], output: pathlib.Path) -> dict[str, Any]:
