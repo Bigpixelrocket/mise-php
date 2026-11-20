@@ -1,5 +1,6 @@
 import datetime as dt
 import email.message
+import http.client
 import io
 import json
 import os
@@ -75,6 +76,20 @@ class PolicyCaptureTests(unittest.TestCase):
         self.assertEqual(b'{"schemaVersion":1}\n', self.output.read_bytes())
         self.assertEqual(4, self.opener.open.call_count)
         self.assertEqual([mock.call(2), mock.call(4), mock.call(8)], self.sleep.call_args_list)
+
+    def test_retries_a_body_cut_off_mid_read(self):
+        truncated = self.response()
+        truncated.read = mock.Mock(side_effect=http.client.IncompleteRead(b'{"schema'))
+        self.opener.open.side_effect = [truncated, self.response()]
+        capture = consumer.fetch_url(self.url, self.output)
+        self.assertEqual(200, capture["status"])
+        self.assertEqual([mock.call(2)], self.sleep.call_args_list)
+
+    def test_exhausted_network_retries_name_the_underlying_reason(self):
+        self.opener.open.side_effect = [urllib.error.URLError("Temporary failure in name resolution")] * 4
+        with self.assertRaises(ConsumerError) as ctx:
+            consumer.fetch_url(self.url, self.output)
+        self.assertIn("URLError: Temporary failure in name resolution (attempt 4)", str(ctx.exception))
 
     def test_exhausted_retries_report_status_and_url_without_error_response_text(self):
         with mock.patch.dict(os.environ, {"GH_TOKEN": "fixture-token"}):

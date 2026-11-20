@@ -15,6 +15,7 @@ import argparse
 import datetime as dt
 import email.utils
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -183,8 +184,11 @@ def fetch_url(url: str, output: pathlib.Path) -> dict[str, Any]:
                 failure = f"HTTP {error.code}"
                 if delay is not None:
                     delay = _http_retry_delay(error, delay)
-        except OSError as error:  # Includes URLError and TimeoutError.
-            failure = type(error).__name__
+        except (OSError, http.client.HTTPException) as error:
+            # OSError covers URLError and timeouts; HTTPException covers a body
+            # cut off mid-read. The reason names the socket or TLS failure and
+            # never echoes request headers.
+            failure = f"{type(error).__name__}: {getattr(error, 'reason', error)}"
         if delay is None:
             raise ConsumerError(f"policy capture failed for {url}: {failure} (attempt {attempt})")
         time.sleep(delay)
